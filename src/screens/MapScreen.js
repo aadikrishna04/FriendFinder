@@ -30,6 +30,14 @@ const MapScreen = ({ navigation }) => {
   const [loadingAttendance, setLoadingAttendance] = useState(false);
   const [hostInfo, setHostInfo] = useState(null);
   const [attendees, setAttendees] = useState([]);
+  const [eventsAtLocation, setEventsAtLocation] = useState([]);
+  const [showLocationSelector, setShowLocationSelector] = useState(false);
+  const [region, setRegion] = useState({
+    latitude: 38.9869,
+    longitude: -76.9426,
+    latitudeDelta: 0.0922,
+    longitudeDelta: 0.0421,
+  });
   const mapRef = useRef(null);
 
   useEffect(() => {
@@ -69,20 +77,177 @@ const MapScreen = ({ navigation }) => {
     return unsubscribe;
   }, [navigation]);
 
+  // Calculate clusters based on current region
+  const getClusters = () => {
+    // Skip if no events
+    if (events.length === 0) return {};
+    
+    // Calculate the pixel distance threshold for clustering based on zoom
+    // The smaller the latitudeDelta (more zoomed in), the smaller the threshold
+    const pixelDistanceThreshold = Math.max(30, 100 * region.latitudeDelta); // Adjust these numbers to control clustering sensitivity
+    
+    // First pass: assign all events to their exact location
+    const exactLocations = {};
+    events.forEach(event => {
+      if (!event.latitude || !event.longitude) return;
+      
+      const locationKey = `${event.latitude.toFixed(6)},${event.longitude.toFixed(6)}`;
+      if (!exactLocations[locationKey]) {
+        exactLocations[locationKey] = {
+          events: [],
+          center: {
+            latitude: event.latitude,
+            longitude: event.longitude
+          }
+        };
+      }
+      exactLocations[locationKey].events.push(event);
+    });
+    
+    // Second pass: merge locations that would visually overlap when displayed
+    const clusters = {};
+    const clusterKeys = Object.keys(exactLocations);
+    
+    // If zoomed in enough, just use exact locations without merging
+    if (region.latitudeDelta < 0.005) {
+      return exactLocations;
+    }
+    
+    // Function to calculate rough screen distance between two points
+    // This is not exact but gives a good approximation for clustering purposes
+    const calculateScreenDistance = (lat1, lon1, lat2, lon2) => {
+      // Calculate approximate pixel distance based on latitude difference
+      const latDistance = Math.abs(lat1 - lat2) / region.latitudeDelta * height;
+      const lonDistance = Math.abs(lon1 - lon2) / region.longitudeDelta * width;
+      return Math.sqrt(latDistance * latDistance + lonDistance * lonDistance);
+    };
+    
+    // Perform clustering based on screen distance
+    const processedKeys = new Set();
+    
+    for (let i = 0; i < clusterKeys.length; i++) {
+      const key = clusterKeys[i];
+      if (processedKeys.has(key)) continue;
+      
+      const location = exactLocations[key];
+      let mergedCluster = { ...location };
+      let allPoints = [location.center];
+      
+      for (let j = 0; j < clusterKeys.length; j++) {
+        if (i === j) continue;
+        
+        const otherKey = clusterKeys[j];
+        if (processedKeys.has(otherKey)) continue;
+        
+        const otherLocation = exactLocations[otherKey];
+        const screenDistance = calculateScreenDistance(
+          location.center.latitude,
+          location.center.longitude,
+          otherLocation.center.latitude,
+          otherLocation.center.longitude
+        );
+        
+        if (screenDistance < pixelDistanceThreshold) {
+          // Merge clusters
+          mergedCluster.events = [...mergedCluster.events, ...otherLocation.events];
+          allPoints.push(otherLocation.center);
+          processedKeys.add(otherKey);
+        }
+      }
+      
+      // Calculate the center of the cluster (average of all merged points)
+      if (allPoints.length > 1) {
+        const sumLat = allPoints.reduce((sum, point) => sum + point.latitude, 0);
+        const sumLng = allPoints.reduce((sum, point) => sum + point.longitude, 0);
+        mergedCluster.center = {
+          latitude: sumLat / allPoints.length,
+          longitude: sumLng / allPoints.length
+        };
+      }
+      
+      const clusterKey = `cluster-${i}`;
+      clusters[clusterKey] = mergedCluster;
+      processedKeys.add(key);
+    }
+    
+    return clusters;
+  };
+  
+  // Get clusters to display
+  const clusters = React.useMemo(() => {
+    return getClusters();
+  }, [events, region]);
+  
+  // Handle region change
+  const onRegionChangeComplete = (newRegion) => {
+    setRegion(newRegion);
+  };
+
+  // Helper function to adjust map position for drawer
+  const animateToMarkerWithOffset = (latitude, longitude) => {
+    if (!mapRef.current) return;
+    
+    // Calculate the center point that will position the marker above the drawer
+    // The drawer takes up 70% of screen height, so we need to shift the map view up
+    const drawerHeight = height * 0.7; // This matches the drawer height in styles
+    const visibleMapHeight = height - drawerHeight;
+    const topPadding = 50; // Extra padding from the top of the visible area
+    
+    // The point should be in the upper portion of the visible map area
+    const verticalOffset = (drawerHeight - visibleMapHeight / 2) / 2 + topPadding;
+    
+    // On iOS, we need to work with map points
+    if (Platform.OS === 'ios') {
+      mapRef.current.animateCamera({
+        center: {
+          latitude,
+          longitude
+        },
+        pitch: 0,
+        heading: 0,
+        altitude: 0,
+        zoom: 17
+      });
+    } else {
+      // For Android, we offset the center point
+      mapRef.current.animateToRegion({
+        latitude: latitude - (verticalOffset / 111111), // Rough conversion from meters to degrees
+        longitude,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      }, 500);
+    }
+  };
+
+  const handleMarkerPress = (locationEvents) => {
+    // If only one event at this location, show event details directly
+    if (locationEvents.length === 1) {
+      handleEventPress(locationEvents[0]);
+    } else {
+      // Multiple events at this location, show the location selector
+      setEventsAtLocation(locationEvents);
+      setShowLocationSelector(true);
+      
+      // Animate to the marker with offset
+      animateToMarkerWithOffset(
+        locationEvents[0].latitude,
+        locationEvents[0].longitude
+      );
+    }
+  };
+
+  const closeLocationSelector = () => {
+    setShowLocationSelector(false);
+    setEventsAtLocation([]);
+  };
+
   const handleEventPress = (event) => {
     setSelectedEvent(event);
     fetchEventDetails(event);
     setShowDrawer(true);
     
-    // Animate to the marker
-    if (mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: event.latitude,
-        longitude: event.longitude,
-        latitudeDelta: 0.005,
-        longitudeDelta: 0.005,
-      }, 500);
-    }
+    // Animate to the marker with offset to keep it visible above the drawer
+    animateToMarkerWithOffset(event.latitude, event.longitude);
   };
   
   const closeDrawer = () => {
@@ -217,36 +382,92 @@ const MapScreen = ({ navigation }) => {
       <MapView
         ref={mapRef}
         style={styles.map}
-        initialRegion={{
-          latitude: 38.9869,
-          longitude: -76.9426,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
-        }}
+        initialRegion={region}
+        onRegionChangeComplete={onRegionChangeComplete}
       >
-        {events.map(event => {
-          // Only show events with valid coordinates
-          if (event.latitude && event.longitude) {
-            return (
-              <Marker
-                key={event.id}
-                coordinate={{ 
-                  latitude: event.latitude, 
-                  longitude: event.longitude 
-                }}
-                onPress={() => handleEventPress(event)}
-              >
-                <View style={styles.markerContainer}>
-                  <View style={styles.markerIcon}>
-                    <View style={styles.markerInner} />
-                  </View>
+        {/* Render clusters with uniform style */}
+        {Object.entries(clusters).map(([clusterKey, cluster]) => {
+          const eventCount = cluster.events.length;
+          return (
+            <Marker
+              key={clusterKey}
+              coordinate={cluster.center}
+              onPress={() => handleMarkerPress(cluster.events)}
+            >
+              <View style={styles.markerContainer}>
+                <View style={[styles.markerIcon, styles.uniformMarker]}>
+                  <Text style={styles.markerCount}>{eventCount}</Text>
                 </View>
-              </Marker>
-            );
-          }
-          return null;
+              </View>
+            </Marker>
+          );
         })}
       </MapView>
+      
+      {/* Location Selector Modal */}
+      <Modal
+        visible={showLocationSelector}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={closeLocationSelector}
+      >
+        <View style={styles.drawerContainer}>
+          <View style={styles.drawerHandle} />
+          <TouchableOpacity 
+            style={styles.closeButton}
+            onPress={closeLocationSelector}
+          >
+            <MaterialIcons name="close" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          
+          <View style={styles.locationSelectorContainer}>
+            <Text style={styles.locationSelectorTitle}>
+              {eventsAtLocation.length} Events at this location
+            </Text>
+            
+            <ScrollView style={styles.locationEventsList}>
+              {eventsAtLocation.map((event) => (
+                <TouchableOpacity
+                  key={event.id}
+                  style={styles.locationEventItem}
+                  onPress={() => {
+                    closeLocationSelector();
+                    handleEventPress(event);
+                  }}
+                >
+                  <View style={styles.locationEventImageContainer}>
+                    {event.image_url ? (
+                      <Image 
+                        source={{ uri: event.image_url }} 
+                        style={styles.locationEventImage} 
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={styles.locationEventNoImage}>
+                        <MaterialIcons name="image" size={24} color={COLORS.placeholder} />
+                      </View>
+                    )}
+                  </View>
+                  
+                  <View style={styles.locationEventInfo}>
+                    <Text style={styles.locationEventTitle} numberOfLines={1}>{event.title}</Text>
+                    <Text style={styles.locationEventDate} numberOfLines={1}>
+                      {formatDate(event.event_date)}
+                    </Text>
+                    <View style={styles.eventTypeTag}>
+                      <Text style={styles.eventTypeText}>
+                        {event.host_id === user?.id ? 'Hosting' : (event.is_open ? 'Open Event' : 'Invitation Only')}
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <MaterialIcons name="chevron-right" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
       
       {/* Event Details Drawer */}
       <Modal
@@ -553,6 +774,84 @@ const styles = StyleSheet.create({
     right: 15,
     zIndex: 10,
     padding: 5,
+  },
+  uniformMarker: {
+    backgroundColor: 'rgba(139, 92, 246, 0.7)',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  markerCount: {
+    color: 'white',
+    fontSize: FONT_SIZES.sm,
+    fontWeight: 'bold',
+  },
+  locationSelectorContainer: {
+    flex: 1,
+    padding: SPACING.md,
+  },
+  locationSelectorTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginBottom: SPACING.md,
+  },
+  locationEventsList: {
+    flex: 1,
+  },
+  locationEventItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  locationEventImageContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginRight: SPACING.md,
+  },
+  locationEventImage: {
+    width: '100%',
+    height: '100%',
+  },
+  locationEventNoImage: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  locationEventInfo: {
+    flex: 1,
+    marginRight: SPACING.sm,
+  },
+  locationEventTitle: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginBottom: SPACING.xs,
+  },
+  locationEventDate: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text,
+    marginBottom: SPACING.xs,
+  },
+  eventTypeTag: {
+    backgroundColor: '#F0F0F0',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs / 2,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  eventTypeText: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.primary,
+    fontWeight: '500',
   },
 });
 
