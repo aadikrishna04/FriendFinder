@@ -21,42 +21,72 @@ const EventsScreen = () => {
   const [user, setUser] = useState(null);
 
   // Load user and events when the screen is focused
-  useFocusEffect(
-    React.useCallback(() => {
+  useEffect(() => 
+    navigation.addListener('focus', () => {
       const loadUserAndEvents = async () => {
         setLoading(true);
         try {
-          // Get current user
+          // Check if user is authenticated
           const { data: { user } } = await supabase.auth.getUser();
-          setUser(user);
           
-          if (user) {
-            // Get user's events - both hosted and attending
-            const { data, error } = await supabase
-              .from('user_events')
-              .select('*')
-              .order('event_date', { ascending: true });
-              
-            if (error) throw error;
-            
-            // Mark events as either hosted or attending
-            const eventsWithRole = data?.map(event => ({
-              ...event,
-              is_host: event.host_id === user.id
-            })) || [];
-            
-            // Sort events - hosted events first, then by date
-            const sortedEvents = eventsWithRole.sort((a, b) => {
-              // First prioritize hosted events
-              if (a.is_host && !b.is_host) return -1;
-              if (!a.is_host && b.is_host) return 1;
-              
-              // Then sort by date (ascending)
-              return new Date(a.event_date) - new Date(b.event_date);
-            });
-            
-            setEvents(sortedEvents);
+          if (!user) {
+            console.log('User not authenticated');
+            navigation.replace('Login');
+            return;
           }
+          
+          // Load all events where user is host
+          const { data: hostedEvents, error: hostedError } = await supabase
+            .from('events')
+            .select('*')
+            .eq('host_id', user.id);
+            
+          if (hostedError) throw hostedError;
+          
+          // Load all events user is attending
+          const { data: attendances, error: attendError } = await supabase
+            .from('event_attendees')
+            .select('event_id')
+            .eq('user_id', user.id);
+            
+          if (attendError) throw attendError;
+          
+          // Get the detailed event data for events user is attending
+          let attendingEvents = [];
+          if (attendances && attendances.length > 0) {
+            const eventIds = attendances.map(a => a.event_id);
+            const { data: eventsData, error: eventsError } = await supabase
+              .from('events')
+              .select('*')
+              .in('id', eventIds);
+              
+            if (eventsError) throw eventsError;
+            attendingEvents = eventsData || [];
+          }
+          
+          // Combine and mark whether user is host or attendee
+          const allEvents = [
+            ...(hostedEvents || []).map(event => ({
+              ...event,
+              is_host: true
+            })),
+            ...attendingEvents.filter(event => event.host_id !== user.id).map(event => ({
+              ...event,
+              is_host: false
+            }))
+          ];
+          
+          // Sort events - hosted events first, then by date
+          const sortedEvents = allEvents.sort((a, b) => {
+            // First prioritize hosted events
+            if (a.is_host && !b.is_host) return -1;
+            if (!a.is_host && b.is_host) return 1;
+            
+            // Then sort by date (ascending)
+            return new Date(a.event_date) - new Date(b.event_date);
+          });
+          
+          setEvents(sortedEvents);
         } catch (error) {
           console.error('Error loading events:', error);
           Alert.alert('Error', 'Failed to load your events');
@@ -160,30 +190,70 @@ const EventsScreen = () => {
             setLoading(true);
             supabase.auth.getUser().then(({ data: { user } }) => {
               if (user) {
+                // Load all events where user is host
                 supabase
-                  .from('user_events')
+                  .from('events')
                   .select('*')
-                  .order('event_date', { ascending: true })
-                  .then(({ data, error }) => {
-                    if (!error) {
-                      // Mark events as either hosted or attending
-                      const eventsWithRole = data?.map(event => ({
-                        ...event,
-                        is_host: event.host_id === user.id
-                      })) || [];
-                      
-                      // Sort events - hosted events first, then by date
-                      const sortedEvents = eventsWithRole.sort((a, b) => {
-                        // First prioritize hosted events
-                        if (a.is_host && !b.is_host) return -1;
-                        if (!a.is_host && b.is_host) return 1;
-                        
-                        // Then sort by date (ascending)
-                        return new Date(a.event_date) - new Date(b.event_date);
-                      });
-                      
-                      setEvents(sortedEvents);
+                  .eq('host_id', user.id)
+                  .then(async ({ data: hostedEvents, error: hostedError }) => {
+                    if (hostedError) {
+                      console.error('Error loading hosted events:', hostedError);
+                      setLoading(false);
+                      return;
                     }
+                    
+                    // Load all events user is attending
+                    const { data: attendances, error: attendError } = await supabase
+                      .from('event_attendees')
+                      .select('event_id')
+                      .eq('user_id', user.id);
+                      
+                    if (attendError) {
+                      console.error('Error loading attendances:', attendError);
+                      setLoading(false);
+                      return;
+                    }
+                    
+                    // Get the detailed event data for events user is attending
+                    let attendingEvents = [];
+                    if (attendances && attendances.length > 0) {
+                      const eventIds = attendances.map(a => a.event_id);
+                      const { data: eventsData, error: eventsError } = await supabase
+                        .from('events')
+                        .select('*')
+                        .in('id', eventIds);
+                        
+                      if (eventsError) {
+                        console.error('Error loading attending events:', eventsError);
+                        setLoading(false);
+                        return;
+                      }
+                      attendingEvents = eventsData || [];
+                    }
+                    
+                    // Combine and mark whether user is host or attendee
+                    const allEvents = [
+                      ...(hostedEvents || []).map(event => ({
+                        ...event,
+                        is_host: true
+                      })),
+                      ...attendingEvents.filter(event => event.host_id !== user.id).map(event => ({
+                        ...event,
+                        is_host: false
+                      }))
+                    ];
+                    
+                    // Sort events - hosted events first, then by date
+                    const sortedEvents = allEvents.sort((a, b) => {
+                      // First prioritize hosted events
+                      if (a.is_host && !b.is_host) return -1;
+                      if (!a.is_host && b.is_host) return 1;
+                      
+                      // Then sort by date (ascending)
+                      return new Date(a.event_date) - new Date(b.event_date);
+                    });
+                    
+                    setEvents(sortedEvents);
                     setLoading(false);
                   });
               } else {

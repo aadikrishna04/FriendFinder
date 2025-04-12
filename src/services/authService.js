@@ -8,6 +8,7 @@ import { supabase } from './supabaseClient';
  */
 const handleError = (error, fallbackMessage) => {
   console.error(`Auth Error: ${error.message || fallbackMessage}`);
+  console.error('Full error details:', JSON.stringify(error, null, 2));
   
   // Map common errors to user-friendly messages
   if (error.message?.includes('Invalid login credentials')) {
@@ -18,6 +19,8 @@ const handleError = (error, fallbackMessage) => {
     return new Error('An account with this email already exists.');
   } else if (error.message?.includes('Password should be at least')) {
     return new Error('Password should be at least 6 characters long.');
+  } else if (error.message?.includes('Network request failed')) {
+    return new Error('Network error. Please check your internet connection and try again.');
   }
   
   return error.message ? error : new Error(fallbackMessage);
