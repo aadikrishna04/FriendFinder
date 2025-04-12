@@ -27,31 +27,32 @@ const handleError = (error, fallbackMessage) => {
  * Sign up a new user
  * @param {string} email - User's email
  * @param {string} password - User's password
- * @param {string} name - User's full name
+ * @param {object} userData - User's additional data
+ * @param {string} userData.name - User's full name
+ * @param {string} userData.phoneNumber - User's phone number
  * @returns {Promise<object>} - The created user object
  */
-export const signUp = async (email, password, name) => {
+export const signUp = async (email, password, userData) => {
   try {
     // Create user in Supabase Auth with user metadata
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { name },
+        data: userData,
         emailRedirectTo: null, // Disable email confirmation
       },
     });
     
     if (error) throw error;
     
-    // Fallback: Manually create user profile if the trigger doesn't work
+    // Create/update user profile in the database
     if (data.user) {
       try {
         await ensureUserProfile(data.user.id, {
-          name,
+          name: userData.name,
           email,
-          avatar_url: null,
-          calendar: JSON.stringify([])
+          phoneNumber: userData.phoneNumber || null,
         });
       } catch (profileError) {
         console.error('Error ensuring user profile:', profileError.message);
@@ -125,26 +126,39 @@ const manualSignIn = async (email, password) => {
  * @private
  */
 const ensureUserProfile = async (userId, userData) => {
-  // Check if user profile exists
-  const { data: profile, error: profileCheckError } = await supabase
-    .from('users')
-    .select('id')
-    .eq('id', userId)
-    .single();
+  try {
+    // Format phone number to ensure consistency
+    let phoneNumber = null;
+    if (userData.phoneNumber) {
+      // Remove all non-numeric characters for consistent storage
+      phoneNumber = userData.phoneNumber.replace(/\D/g, '');
+      console.log(`Formatted phone number: ${phoneNumber}`);
+    }
+
+    console.log(`Creating/updating user profile with ID: ${userId}`);
     
-  // If profile doesn't exist or there was an error checking, create it
-  if (profileCheckError || !profile) {
-    console.log('Creating user profile...');
-    const { error: insertError } = await supabase
+    // Create user profile with data mapped to the correct column names in the database
+    const { data, error } = await supabase
       .from('users')
       .upsert({
         id: userId,
-        ...userData
-      });
+        name: userData.name, // Use 'name' as per the database schema
+        email: userData.email,
+        avatar_url: null,
+        calendar: JSON.stringify([]),
+        phone_number: phoneNumber
+      }, { onConflict: 'id' });
     
-    if (insertError) {
-      throw insertError;
+    if (error) {
+      console.error('Error in ensureUserProfile:', error);
+      throw error;
     }
+    
+    console.log(`User profile successfully created/updated.`);
+    return data;
+  } catch (error) {
+    console.error('Error in ensureUserProfile:', error);
+    throw error;
   }
 };
 

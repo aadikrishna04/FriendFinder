@@ -6,17 +6,19 @@ import {
   SafeAreaView, 
   KeyboardAvoidingView, 
   Platform,
-  Alert 
+  Alert,
+  TouchableOpacity
 } from 'react-native';
 import { Button, Input, FriendAvatars } from '../components';
 import { signUp } from '../services/authService';
-import { COLORS, SPACING, FONT_SIZES } from '../constants';
+import { COLORS, SPACING, FONT_SIZES, LAYOUT } from '../constants';
 
 const SignUpScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [username, setUsername] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
 
@@ -29,9 +31,12 @@ const SignUpScreen = ({ navigation }) => {
     if (!password) newErrors.password = 'Password is required';
     else if (password.length < 6) newErrors.password = 'Password must be at least 6 characters';
     
-    if (password !== confirmPassword) newErrors.confirmPassword = 'Passwords do not match';
+    if (!fullName) newErrors.fullName = 'Full Name is required';
     
-    if (!username) newErrors.username = 'Username is required';
+    if (!phoneNumber) newErrors.phoneNumber = 'Phone Number is required';
+    else if (!/^\d{10}$/.test(phoneNumber.replace(/\D/g, ''))) {
+      newErrors.phoneNumber = 'Please enter a valid 10-digit phone number';
+    }
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -45,17 +50,25 @@ const SignUpScreen = ({ navigation }) => {
     setLoading(true);
     
     try {
-      await signUp(email, password, { username });
-      Alert.alert(
-        'Success', 
-        'Your account has been created!',
-        [{ text: 'OK', onPress: () => navigation.navigate('SignIn') }]
-      );
+      // Format phone number consistently
+      const formattedPhoneNumber = phoneNumber.replace(/\D/g, '');
+      
+      await signUp(email, password, { 
+        name: fullName,
+        phoneNumber: formattedPhoneNumber
+      });
+      
+      // Navigate to SignIn without showing an alert
+      navigation.navigate('SignIn');
     } catch (error) {
       Alert.alert('Sign Up Failed', error.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const togglePasswordVisibility = () => {
+    setShowPassword(!showPassword);
   };
 
   return (
@@ -74,6 +87,14 @@ const SignUpScreen = ({ navigation }) => {
         
         <View style={styles.formContainer}>
           <Input
+            placeholder="Full Name"
+            value={fullName}
+            onChangeText={setFullName}
+            error={errors.fullName}
+            errorText={errors.fullName}
+          />
+          
+          <Input
             placeholder="Email"
             value={email}
             onChangeText={setEmail}
@@ -84,31 +105,33 @@ const SignUpScreen = ({ navigation }) => {
           />
           
           <Input
-            placeholder="Username"
-            value={username}
-            onChangeText={setUsername}
-            autoCapitalize="none"
-            error={errors.username}
-            errorText={errors.username}
+            placeholder="Phone Number"
+            value={phoneNumber}
+            onChangeText={setPhoneNumber}
+            keyboardType="phone-pad"
+            error={errors.phoneNumber}
+            errorText={errors.phoneNumber}
           />
           
-          <Input
-            placeholder="Password"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            error={errors.password}
-            errorText={errors.password}
-          />
-          
-          <Input
-            placeholder="Confirm Password"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry
-            error={errors.confirmPassword}
-            errorText={errors.confirmPassword}
-          />
+          <View style={styles.passwordContainer}>
+            <Input
+              placeholder="Password"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              error={errors.password}
+              errorText={errors.password}
+              style={{flex: 1}}
+            />
+            <TouchableOpacity 
+              style={styles.eyeIcon} 
+              onPress={togglePasswordVisibility}
+            >
+              <Text style={styles.eyeIconText}>
+                {showPassword ? '👁️' : '👁️‍🗨️'}
+              </Text>
+            </TouchableOpacity>
+          </View>
           
           <Button
             title="Create Account"
@@ -152,11 +175,33 @@ const styles = StyleSheet.create({
   formContainer: {
     paddingHorizontal: SPACING.lg,
   },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.md,
+    position: 'relative',
+  },
+  eyeIcon: {
+    position: 'absolute',
+    right: SPACING.md,
+    height: '100%',
+    justifyContent: 'center',
+    paddingHorizontal: SPACING.sm,
+    zIndex: 1,
+  },
+  eyeIconText: {
+    fontSize: FONT_SIZES.md,
+  },
   button: {
     marginTop: SPACING.md,
   },
   secondaryButton: {
     marginTop: SPACING.lg,
+  },
+  errorText: {
+    color: COLORS.error,
+    fontSize: FONT_SIZES.xs,
+    marginTop: SPACING.xs,
   },
 });
 
