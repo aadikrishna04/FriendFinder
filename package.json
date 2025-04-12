@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
-    "start": "expo start --config-file app.json",
+    "start": "expo start",
     "android": "expo start --android --config-file app.json",
-    "ios": "expo start --ios --config-file app.json",
+    "ios": "expo start",
     "web": "expo start --web --config-file app.json"
   },
   "babel": {

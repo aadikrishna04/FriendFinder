@@ -186,11 +186,17 @@ const styles = StyleSheet.create({
     right: SPACING.md,
     height: '100%',
     justifyContent: 'center',
+    alignItems: 'center',
     paddingHorizontal: SPACING.sm,
     zIndex: 1,
+    top: -3,
+    right: 1.1,
   },
   eyeIconText: {
     fontSize: FONT_SIZES.md,
+    lineHeight: FONT_SIZES.md * 1.5,
+    marginTop: -3,
+    marginRight: 1.1,
   },
   button: {
     marginTop: SPACING.md,
