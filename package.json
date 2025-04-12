@@ -4,10 +4,13 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "start": "expo start --config-file app.json",
+    "android": "expo start --android --config-file app.json",
+    "ios": "expo start --ios --config-file app.json",
+    "web": "expo start --web --config-file app.json"
+  },
+  "babel": {
+    "extends": "./config/babel.config.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.2",

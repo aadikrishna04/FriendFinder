@@ -2,59 +2,38 @@ import React, { useState } from 'react';
 import { 
   View, 
   Text, 
-  TextInput, 
-  TouchableOpacity, 
   StyleSheet, 
   SafeAreaView, 
   KeyboardAvoidingView, 
   Platform,
   Alert 
 } from 'react-native';
+import { Button, Input, FriendAvatars } from '../components';
 import { signIn } from '../services/authService';
-
-const FriendAvatars = () => {
-  return (
-    <View style={styles.avatarsContainer}>
-      <View style={[styles.centerAvatar, { backgroundColor: '#6366F1' }]}>
-        <Text style={styles.emojiText}>😄✌️</Text>
-      </View>
-      
-      <View style={[styles.avatar, styles.avatar1, { backgroundColor: '#F59E0B' }]}>
-        <Text style={styles.emojiText}>👩</Text>
-      </View>
-      <View style={[styles.avatar, styles.avatar2, { backgroundColor: '#34D399' }]}>
-        <Text style={styles.emojiText}>🧔</Text>
-      </View>
-      <View style={[styles.avatar, styles.avatar3, { backgroundColor: '#F59E0B' }]}>
-        <Text style={styles.emojiText}>👨‍🦲</Text>
-      </View>
-      <View style={[styles.avatar, styles.avatar4, { backgroundColor: '#EC4899' }]}>
-        <Text style={styles.emojiText}>👩‍🦱</Text>
-      </View>
-    </View>
-  );
-};
+import { COLORS, SPACING, FONT_SIZES } from '../constants';
 
 const SignInScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const handleSignIn = async () => {
+    // Validate inputs
     if (!email || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+      setError('Please fill in all fields');
       return;
     }
-
+    
+    setError(null);
+    setLoading(true);
+    
     try {
-      setLoading(true);
       await signIn(email, password);
-      
-      // Instead of directly navigating to HomeScreen, 
-      // inform the parent navigator by setting auth state
-      // This is handled in App.tsx with the onAuthStateChange listener
+      // Auth state listener in App.tsx will handle navigation
     } catch (error) {
-      Alert.alert('Error', error.message);
+      setError(error.message);
+      Alert.alert('Sign In Failed', error.message);
     } finally {
       setLoading(false);
     }
@@ -71,45 +50,41 @@ const SignInScreen = ({ navigation }) => {
         </View>
         
         <View style={styles.avatarSection}>
-          <FriendAvatars />
+          <FriendAvatars variant="small" />
         </View>
         
         <View style={styles.formContainer}>
-          <TextInput
-            style={styles.input}
+          <Input
             placeholder="Email"
-            placeholderTextColor="#A0A0A0"
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            error={error && !email}
           />
           
-          <TextInput
-            style={styles.input}
+          <Input
             placeholder="Password"
-            placeholderTextColor="#A0A0A0"
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            error={error && !password}
           />
           
-          <TouchableOpacity 
-            style={styles.signInButton}
+          <Button
+            title="Sign In"
             onPress={handleSignIn}
+            loading={loading}
             disabled={loading}
-          >
-            <Text style={styles.signInButtonText}>
-              {loading ? 'Signing in...' : 'Sign In'}
-            </Text>
-          </TouchableOpacity>
+            style={styles.button}
+          />
           
-          <TouchableOpacity 
-            style={styles.signUpLink}
+          <Button
+            title="No Account? Sign Up!"
             onPress={() => navigation.navigate('SignUp')}
-          >
-            <Text style={styles.signUpLinkText}>No Account? Sign Up!</Text>
-          </TouchableOpacity>
+            variant="secondary"
+            style={styles.secondaryButton}
+          />
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -119,91 +94,31 @@ const SignInScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: COLORS.background,
   },
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 60,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.xxl,
   },
   title: {
-    fontSize: 32,
+    fontSize: FONT_SIZES.xxl,
     fontWeight: 'bold',
     textAlign: 'center',
+    color: COLORS.text,
   },
   avatarSection: {
     alignItems: 'center',
-    paddingVertical: 20,
-  },
-  avatarsContainer: {
-    width: 250,
-    height: 150,
-    position: 'relative',
-  },
-  centerAvatar: {
-    position: 'absolute',
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
-    top: '50%',
-    left: '50%',
-    marginLeft: -50,
-    marginTop: -50,
-    zIndex: 10,
-  },
-  avatar: {
-    position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatar1: { top: 0, left: 40 },
-  avatar2: { top: 0, right: 40 },
-  avatar3: { bottom: 0, left: 40 },
-  avatar4: { bottom: 0, right: 40 },
-  emojiText: {
-    fontSize: 24,
+    paddingVertical: SPACING.lg,
   },
   formContainer: {
-    paddingHorizontal: 20,
-    marginTop: 20,
+    paddingHorizontal: SPACING.lg,
+    marginTop: SPACING.lg,
   },
-  input: {
-    height: 54,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 10,
-    marginBottom: 15,
-    paddingHorizontal: 15,
-    fontSize: 16,
+  button: {
+    marginTop: SPACING.md,
   },
-  signInButton: {
-    backgroundColor: '#8B5CF6',
-    height: 54,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  signInButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  signUpLink: {
-    marginTop: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  signUpLinkText: {
-    fontSize: 16,
-    color: '#8B5CF6',
-    fontWeight: '600',
+  secondaryButton: {
+    marginTop: SPACING.lg,
   },
 });
 

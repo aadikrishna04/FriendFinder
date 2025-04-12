@@ -1,6 +1,29 @@
 import { supabase } from './supabaseClient';
 
 /**
+ * Error handler utility to provide consistent error messages
+ * @param {Error} error - The error object
+ * @param {string} fallbackMessage - Fallback message if error doesn't have a message
+ * @returns {Error} - Error with appropriate message
+ */
+const handleError = (error, fallbackMessage) => {
+  console.error(`Auth Error: ${error.message || fallbackMessage}`);
+  
+  // Map common errors to user-friendly messages
+  if (error.message?.includes('Invalid login credentials')) {
+    return new Error('Invalid email or password. Please try again.');
+  } else if (error.message?.includes('Email not confirmed')) {
+    return new Error('Please confirm your email address before signing in.');
+  } else if (error.message?.includes('User already registered')) {
+    return new Error('An account with this email already exists.');
+  } else if (error.message?.includes('Password should be at least')) {
+    return new Error('Password should be at least 6 characters long.');
+  }
+  
+  return error.message ? error : new Error(fallbackMessage);
+};
+
+/**
  * Sign up a new user
  * @param {string} email - User's email
  * @param {string} password - User's password
@@ -10,15 +33,12 @@ import { supabase } from './supabaseClient';
 export const signUp = async (email, password, name) => {
   try {
     // Create user in Supabase Auth with user metadata
-    // Disable email confirmation by setting emailRedirectTo to null
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: {
-          name,
-        },
-        emailRedirectTo: null,
+        data: { name },
+        emailRedirectTo: null, // Disable email confirmation
       },
     });
     
@@ -27,53 +47,29 @@ export const signUp = async (email, password, name) => {
     // Fallback: Manually create user profile if the trigger doesn't work
     if (data.user) {
       try {
-        // Check if user profile exists
-        const { data: profile, error: profileCheckError } = await supabase
-          .from('users')
-          .select('id')
-          .eq('id', data.user.id)
-          .single();
-          
-        // If profile doesn't exist or there was an error checking, create it
-        if (profileCheckError || !profile) {
-          console.log('Creating user profile manually as fallback...');
-          const { error: insertError } = await supabase.from('users').upsert({
-            id: data.user.id,
-            name: name,
-            email: email,
-            avatar_url: null,
-            calendar: JSON.stringify([])
-          });
-          
-          if (insertError) {
-            console.error('Error in manual profile creation:', insertError.message);
-          }
-        }
+        await ensureUserProfile(data.user.id, {
+          name,
+          email,
+          avatar_url: null,
+          calendar: JSON.stringify([])
+        });
       } catch (profileError) {
-        console.error('Error checking/creating user profile:', profileError.message);
+        console.error('Error ensuring user profile:', profileError.message);
+        // Continue anyway since the auth record was created
       }
     }
     
-    // Auto sign-in after signup (this step is technically not needed with Supabase's current behavior,
-    // but we're including it for clarity and to ensure consistent behavior)
+    // Auto sign-in after signup if needed
     if (!data.session) {
       console.log('No session after signup, performing manual sign-in');
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      
-      if (signInError) {
-        console.error('Error signing in after signup:', signInError.message);
-      }
+      await manualSignIn(email, password);
     } else {
       console.log('Session automatically created after signup');
     }
     
     return data.user;
   } catch (error) {
-    console.error('Error signing up:', error.message);
-    throw error;
+    throw handleError(error, 'Failed to sign up. Please try again.');
   }
 };
 
@@ -87,36 +83,68 @@ export const signIn = async (email, password) => {
   try {
     console.log(`Attempting to sign in with email: ${email}`);
     
-    // Attempt to sign in
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
     
-    if (error) {
-      console.error('Sign in error details:', error);
-      
-      // Provide more friendly error messages based on the error code
-      if (error.message.includes('Invalid login credentials')) {
-        throw new Error('Invalid email or password. Please try again.');
-      } else if (error.message.includes('Email not confirmed')) {
-        throw new Error('Please confirm your email address before signing in.');
-      } else {
-        throw error;
-      }
-    }
+    if (error) throw error;
     
-    // Additional check to make sure we have user data
-    if (!data || !data.user) {
-      console.error('Sign in succeeded but no user data was returned');
-      throw new Error('Sign in failed. Please try again.');
+    if (!data?.user) {
+      throw new Error('Sign in failed. No user data returned.');
     }
     
     console.log('Sign in successful for user:', data.user.id);
     return data.user;
   } catch (error) {
-    console.error('Error signing in:', error.message);
-    throw error;
+    throw handleError(error, 'Failed to sign in. Please try again.');
+  }
+};
+
+/**
+ * Helper function for manual sign-in
+ * @private
+ */
+const manualSignIn = async (email, password) => {
+  try {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    
+    if (error) {
+      console.error('Error signing in after signup:', error.message);
+    }
+  } catch (error) {
+    console.error('Error in manual sign-in:', error.message);
+  }
+};
+
+/**
+ * Ensure user profile exists in the users table
+ * @private
+ */
+const ensureUserProfile = async (userId, userData) => {
+  // Check if user profile exists
+  const { data: profile, error: profileCheckError } = await supabase
+    .from('users')
+    .select('id')
+    .eq('id', userId)
+    .single();
+    
+  // If profile doesn't exist or there was an error checking, create it
+  if (profileCheckError || !profile) {
+    console.log('Creating user profile...');
+    const { error: insertError } = await supabase
+      .from('users')
+      .upsert({
+        id: userId,
+        ...userData
+      });
+    
+    if (insertError) {
+      throw insertError;
+    }
   }
 };
 
@@ -128,8 +156,7 @@ export const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   } catch (error) {
-    console.error('Error signing out:', error.message);
-    throw error;
+    throw handleError(error, 'Failed to sign out. Please try again.');
   }
 };
 
@@ -152,7 +179,6 @@ export const getUserProfile = async () => {
     if (error) throw error;
     return profile;
   } catch (error) {
-    console.error('Error getting user profile:', error.message);
-    throw error;
+    throw handleError(error, 'Failed to get user profile. Please try again.');
   }
 }; 
