@@ -5,13 +5,16 @@ const fs = require('fs').promises;
 const path = require('path');
 require('dotenv').config();
 
+global.fetch = require('node-fetch');
+global.Headers = fetch.Headers;
+
 const apiKey = process.env.GEMINI_API_KEY;
 const ai = new GoogleGenAI({ apiKey });
 
 // Only events from 48 hours from now.
 /**
  * Fetch HTML for individual event cards for the next 48 hours from TerpLink
- * @returns {Promise<Array<string>>} Array of HTML strings for each event card
+ * @returns {Promise<Array<string>>} 
  */
 async function getEventCardsHtml() {
   const browser = await chromium.launch({ headless: true });
