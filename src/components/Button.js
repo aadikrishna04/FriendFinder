@@ -5,7 +5,7 @@ import {
   StyleSheet, 
   ActivityIndicator 
 } from 'react-native';
-import { COLORS, LAYOUT, FONT_SIZES } from '../constants';
+import { COLORS, LAYOUT, FONT_SIZES, SPACING } from '../constants';
 
 /**
  * Reusable button component

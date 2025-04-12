@@ -13,6 +13,7 @@
     "extends": "./config/babel.config.js"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~4.0.1",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-navigation/native": "^7.1.6",
     "@react-navigation/stack": "^7.2.10",
@@ -24,7 +25,10 @@
     "react": "18.3.1",
     "react-native": "0.76.9",
     "react-native-dotenv": "^3.4.11",
-    "react-native-maps": "^1.21.0"
+    "react-native-gesture-handler": "~2.20.2",
+    "react-native-maps": "^1.21.0",
+    "react-native-safe-area-context": "4.12.0",
+    "react-native-web": "~0.19.13"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
