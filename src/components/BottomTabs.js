@@ -1,10 +1,39 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createStackNavigator } from "@react-navigation/stack";
 import ProfileScreen from "../screens/ProfileScreen";
 import MapScreen from "../screens/MapScreen";
+import EventsScreen from "../screens/EventsScreen";
+import CreateEventScreen from "../screens/CreateEventScreen";
+import EditEventScreen from "../screens/EditEventScreen";
+import EventDetailsScreen from "../screens/EventDetailsScreen";
 import Icon from "react-native-vector-icons/Ionicons"; // or MaterialIcons, Feather etc.
 
 const Tab = createBottomTabNavigator();
+const Stack = createStackNavigator();
+
+// Create a stack navigator for the events flow
+const EventsStack = () => {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="EventsList" component={EventsScreen} />
+      <Stack.Screen name="CreateEvent" component={CreateEventScreen} />
+      <Stack.Screen name="EditEvent" component={EditEventScreen} />
+      <Stack.Screen name="EventDetails" component={EventDetailsScreen} />
+    </Stack.Navigator>
+  );
+};
+
+// Create a stack navigator for the map flow
+const MapStack = () => {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="MapView" component={MapScreen} />
+      <Stack.Screen name="EventDetails" component={EventDetailsScreen} />
+      <Stack.Screen name="EditEventScreen" component={EditEventScreen} />
+    </Stack.Navigator>
+  );
+};
 
 const BottomTabs = () => {
   return (
@@ -14,9 +43,9 @@ const BottomTabs = () => {
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
 
-          if (route.name === "My Map") {
+          if (route.name === "Map") {
             iconName = focused ? "map" : "map-outline";
-          } else if (route.name === "Events") {
+          } else if (route.name === "My Events") {
             iconName = focused ? "calendar" : "calendar-outline";
           } else if (route.name === "Profile") {
             iconName = focused ? "person" : "person-outline";
@@ -33,9 +62,9 @@ const BottomTabs = () => {
         },
       })}
     >
-      <Tab.Screen name="My Map" component={MapScreen} />
+      <Tab.Screen name="Map" component={MapStack} />
+      <Tab.Screen name="My Events" component={EventsStack} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
-      <Tab.Screen name="Events" component={ProfileScreen} />
     </Tab.Navigator>
   );
 };
