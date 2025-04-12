@@ -59,12 +59,7 @@ async function getEventCardsHtml() {
       await browser.close();
       return [];
     }
-    
-    console.log('Scrolling to load all event cards...');
-    await autoScroll(page);    
-    await page.screenshot({ path: 'terplink-events.png' });
-    console.log('Saved screenshot to terplink-events.png for debugging');
-    
+        
     console.log('Extracting HTML for each event card...');
     const eventCardsHtml = await page.evaluate(() => {
       let cards = [];
