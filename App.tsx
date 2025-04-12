@@ -3,20 +3,17 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Session } from '@supabase/supabase-js';
 import { CardStyleInterpolators } from '@react-navigation/stack';
-
+import BottomTabs from './src/components/BottomTabs'
 // Import screens using require to avoid TypeScript errors
 const SplashScreen = require('./src/screens/SplashScreen').default;
 const SignInScreen = require('./src/screens/SignInScreen').default;
 const SignUpScreen = require('./src/screens/SignUpScreen').default;
-const HomeScreen = require('./src/screens/HomeScreen').default;
-const UserProfileScreen = require('./src/screens/UserProfileScreen').default;
 
 // Import Supabase client
 import { supabase } from './src/services/supabaseClient';
 
 const Stack = createStackNavigator();
 const AuthStack = createStackNavigator();
-const MainStack = createStackNavigator();
 
 // Auth navigator component with custom transitions
 const AuthNavigator = () => {
@@ -54,26 +51,6 @@ const AuthNavigator = () => {
         }}
       />
     </AuthStack.Navigator>
-  );
-};
-
-// Main app navigator after authentication
-const MainNavigator = () => {
-  return (
-    <MainStack.Navigator 
-      screenOptions={{ 
-        headerShown: false,
-      }}
-    >
-      <MainStack.Screen name="Home" component={HomeScreen} />
-      <MainStack.Screen 
-        name="UserProfile" 
-        component={UserProfileScreen}
-        options={{
-          cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
-        }}
-      />
-    </MainStack.Navigator>
   );
 };
 
@@ -115,16 +92,14 @@ export default function App() {
         {showSplash ? (
           <Stack.Screen name="Splash" component={SplashScreen} />
         ) : session ? (
-          // User is signed in - use the main navigator
-          <Stack.Screen name="Main" component={MainNavigator} />
+          // ✅ Use Bottom Tabs if user is signed in
+          <Stack.Screen name="MainApp" component={BottomTabs} />
         ) : (
-          // User is not signed in - use the auth navigator
-          <Stack.Screen 
-            name="Auth" 
-            component={AuthNavigator} 
-          />
+          // ❌ Auth screens if not signed in
+          <Stack.Screen name="Auth" component={AuthNavigator} />
         )}
       </Stack.Navigator>
     </NavigationContainer>
   );
+  
 }
