@@ -499,33 +499,46 @@ const MapScreen = ({ navigation }) => {
       if (attendingError) throw attendingError;
       setAttending(attendingData && attendingData.length > 0);
       
-      // Get attendees - Modified to avoid the relationship error
-      // First get the attendee IDs
-      const { data: attendeeIds, error: attendeeIdsError } = await supabase
+      // Fix for the foreign key relationship error (PGRST200):
+      // Get attendee user IDs first, then fetch user details separately
+      
+      // Step 1: Get attendee IDs
+      const { data: attendeeRecords, error: attendeeError } = await supabase
         .from('event_attendees')
         .select('user_id')
         .eq('event_id', event.id);
         
-      if (attendeeIdsError) throw attendeeIdsError;
-      
-      // No attendees case
-      if (!attendeeIds || attendeeIds.length === 0) {
+      if (attendeeError) {
+        console.error('Error fetching attendees:', attendeeError);
         setAttendees([]);
         return;
       }
       
-      // Then get user details for those IDs
-      const userIds = attendeeIds.map(item => item.user_id);
-      const { data: userData, error: userDataError } = await supabase
+      // No attendees case
+      if (!attendeeRecords || attendeeRecords.length === 0) {
+        setAttendees([]);
+        return;
+      }
+      
+      // Step 2: Extract the user IDs from the records
+      const userIds = attendeeRecords.map(record => record.user_id);
+      
+      // Step 3: Get user details for those IDs
+      const { data: userData, error: userError } = await supabase
         .from('users')
         .select('id, name, email, phone_number')
         .in('id', userIds);
         
-      if (userDataError) throw userDataError;
+      if (userError) {
+        console.error('Error fetching user data:', userError);
+        setAttendees([]);
+        return;
+      }
       
       setAttendees(userData || []);
     } catch (error) {
       console.error('Error fetching event details:', error);
+      Alert.alert('Error', 'Failed to load event details');
     }
   };
   
