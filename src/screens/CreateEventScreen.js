@@ -45,6 +45,7 @@ const CreateEventScreen = () => {
   const [tags, setTags] = useState("");
   const [coordinates, setCoordinates] = useState(null);
   const [user, setUser] = useState(null);
+  const [scrollOffset, setScrollOffset] = useState(0);
 
   // Time picker state
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -958,6 +959,17 @@ const CreateEventScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Sticky Header */}
+      <View style={[styles.stickyHeader, { opacity: scrollOffset > 50 ? 1 : 0 }]}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>New Event</Text>
+      </View>
+
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.container}
@@ -967,6 +979,10 @@ const CreateEventScreen = () => {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={true}
           bounces={true}
+          onScroll={(event) => {
+            setScrollOffset(event.nativeEvent.contentOffset.y);
+          }}
+          scrollEventThrottle={16}
         >
           <View style={styles.header}>
             <TouchableOpacity
@@ -1281,6 +1297,28 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
+  },
+  stickyHeader: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 45 : 20, // Lowered position to make it more visible
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    padding: SPACING.md,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderTopWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.background,
+    zIndex: 1000,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    borderRadius: 8,
+    marginHorizontal: SPACING.sm,
   },
   backButton: {
     padding: SPACING.xs,
