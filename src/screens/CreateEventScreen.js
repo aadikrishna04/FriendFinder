@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import * as FileSystem from "expo-file-system";
 import { Buffer } from "buffer";
 import { Keyboard } from 'react-native';
+import Slider from '@react-native-community/slider';
 
 import {
   View,
@@ -46,6 +47,7 @@ const CreateEventScreen = () => {
   const [coordinates, setCoordinates] = useState(null);
   const [user, setUser] = useState(null);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const [searchRadius, setSearchRadius] = useState(5); // Default 5 miles
 
   // Time picker state
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -1399,6 +1401,36 @@ const styles = StyleSheet.create({
   },
   validateButtonText: {
     color: "white",
+  },
+  radiusContainer: {
+    marginTop: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
+  },
+  radiusSlider: {
+    height: 40,
+    width: '100%',
+  },
+  radiusValue: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
+    color: COLORS.primary,
+    textAlign: 'center',
+    marginBottom: SPACING.xs,
+  },
+  radiusLabelContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: -SPACING.xs,
+  },
+  radiusMinLabel: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text,
+    opacity: 0.7,
+  },
+  radiusMaxLabel: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text,
+    opacity: 0.7,
     fontSize: FONT_SIZES.sm,
     fontWeight: "600",
   },
