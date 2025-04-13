@@ -10,6 +10,9 @@ import ProfileScreen from "../screens/ProfileScreen";
 import UserProfileScreen from "../screens/UserProfileScreen";
 import NotificationScreen from "../screens/NotificationScreen";
 import Icon from "react-native-vector-icons/Ionicons"; // or MaterialIcons, Feather etc.
+import { TouchableOpacity, Platform } from 'react-native';
+import GroupsScreen from '../screens/GroupsScreen';
+import GroupDetailScreen from '../screens/GroupDetailScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -52,6 +55,18 @@ const NotificationsStack = () => {
   );
 };
 
+// Groups stack navigator
+const GroupsStack = () => {
+  return (
+    <Stack.Navigator initialRouteName="GroupsScreen" screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="GroupsScreen" component={GroupsScreen} />
+      <Stack.Screen name="GroupDetail" component={GroupDetailScreen} />
+      <Stack.Screen name="Profile" component={ProfileScreen} />
+      <Stack.Screen name="UserProfile" component={UserProfileScreen} />
+    </Stack.Navigator>
+  );
+};
+
 const BottomTabs = () => {
   return (
     <Tab.Navigator
@@ -66,6 +81,8 @@ const BottomTabs = () => {
             iconName = focused ? "calendar" : "calendar-outline";
           } else if (route.name === "Notifications") {
             iconName = focused ? "notifications" : "notifications-outline";
+          } else if (route.name === "Groups") {
+            iconName = focused ? "people" : "people-outline";
           }
 
           return <Icon name={iconName} size={size} color={color} />;
@@ -75,12 +92,26 @@ const BottomTabs = () => {
         tabBarStyle: {
           backgroundColor: "#ebebeb",
           paddingTop: 10,
-          height: 90,
+          height: Platform.OS === 'ios' ? 90 : 70,
+          paddingBottom: Platform.OS === 'ios' ? 25 : 10,
+          borderTopLeftRadius: 20,
+          borderTopRightRadius: 20,
+          borderLeftWidth: 0.2,
+          borderRightWidth: 0.2,
+          borderTopWidth: 0.2,
+          position: 'absolute',
+          overflow: 'hidden',
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+          paddingBottom: 5,
         },
       })}
     >
       <Tab.Screen name="Map" component={MapStack} />
       <Tab.Screen name="My Events" component={EventsStack} />
+      <Tab.Screen name="Groups" component={GroupsStack} />
       <Tab.Screen name="Notifications" component={NotificationsStack} />
     </Tab.Navigator>
   );
