@@ -897,7 +897,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: SPACING.medium + 6,
+    marginRight: SPACING.sm,
   },
   memberInitials: {
     color: COLORS.white,
