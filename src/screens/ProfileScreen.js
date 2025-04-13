@@ -5,6 +5,7 @@ import {
   StyleSheet, 
   SafeAreaView, 
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Image,
   ActivityIndicator,
   Alert,
@@ -518,7 +519,8 @@ const ProfileScreen = ({ navigation, route }) => {
           onPress={() => setShowAddContactModal(true)}
           activeOpacity={0.8}
         >
-          <MaterialIcons name="add" size={28} color="white" />
+          <MaterialIcons name="person-add" size={22} color="white" />
+          <Text style={styles.floatingAddButtonText}>Add Contact</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -788,77 +790,85 @@ const ProfileScreen = ({ navigation, route }) => {
         animationType="slide"
         onRequestClose={() => setShowAddContactModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add New Contact</Text>
-              <TouchableOpacity 
-                onPress={() => setShowAddContactModal(false)}
-                style={styles.closeButton}
-              >
-                <MaterialIcons name="close" size={24} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.formContainer}>
-              <Text style={styles.modalNote}>
-                Note: You can only add contacts who are registered for the app using their email or phone number.
-              </Text>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Name*</Text>
-                <TextInput
-                  style={[styles.input, errors.name && styles.inputError]}
-                  value={newContact.name}
-                  onChangeText={(text) => setNewContact({...newContact, name: text})}
-                  placeholder="Contact name"
-                />
-                {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Email</Text>
-                <TextInput
-                  style={[styles.input, errors.email && styles.inputError]}
-                  value={newContact.email}
-                  onChangeText={(text) => setNewContact({...newContact, email: text})}
-                  placeholder="Email address of registered user"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-                {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Phone Number</Text>
-                <TextInput
-                  style={[styles.input, errors.phoneNumber && styles.inputError]}
-                  value={newContact.phoneNumber}
-                  onChangeText={(text) => setNewContact({...newContact, phoneNumber: text})}
-                  placeholder="Phone number of registered user"
-                  keyboardType="phone-pad"
-                />
-                {errors.phoneNumber && <Text style={styles.errorText}>{errors.phoneNumber}</Text>}
-              </View>
-              
-              <View style={styles.buttonContainer}>
-                <TouchableOpacity
-                  style={[styles.button, styles.cancelButton]}
-                  onPress={() => setShowAddContactModal(false)}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
+        <TouchableOpacity 
+          activeOpacity={1}
+          style={styles.modalOverlay}
+          onPress={() => setShowAddContactModal(false)}
+        >
+          <View style={styles.modalContainerWrapper}>
+            <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
+              <View style={styles.modalContainer}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Add New Contact</Text>
+                  <TouchableOpacity 
+                    onPress={() => setShowAddContactModal(false)}
+                    style={styles.closeButton}
+                  >
+                    <MaterialIcons name="close" size={24} color={COLORS.text} />
+                  </TouchableOpacity>
+                </View>
                 
-                <TouchableOpacity
-                  style={[styles.button, styles.addContactButton]}
-                  onPress={addContact}
-                >
-                  <Text style={styles.modalButtonText}>Add Contact</Text>
-                </TouchableOpacity>
+                <View style={styles.formContainer}>
+                  <Text style={styles.modalNote}>
+                    Note: You can only add contacts who are registered for the app using their email or phone number.
+                  </Text>
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>Name*</Text>
+                    <TextInput
+                      style={[styles.input, errors.name && styles.inputError]}
+                      value={newContact.name}
+                      onChangeText={(text) => setNewContact({...newContact, name: text})}
+                      placeholder="Contact name"
+                    />
+                    {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
+                  </View>
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>Email</Text>
+                    <TextInput
+                      style={[styles.input, errors.email && styles.inputError]}
+                      value={newContact.email}
+                      onChangeText={(text) => setNewContact({...newContact, email: text})}
+                      placeholder="Email address of registered user"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                    {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
+                  </View>
+                  
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>Phone Number</Text>
+                    <TextInput
+                      style={[styles.input, errors.phoneNumber && styles.inputError]}
+                      value={newContact.phoneNumber}
+                      onChangeText={(text) => setNewContact({...newContact, phoneNumber: text})}
+                      placeholder="Phone number of registered user"
+                      keyboardType="phone-pad"
+                    />
+                    {errors.phoneNumber && <Text style={styles.errorText}>{errors.phoneNumber}</Text>}
+                  </View>
+                  
+                  <View style={styles.buttonContainer}>
+                    <TouchableOpacity
+                      style={[styles.button, styles.cancelButton]}
+                      onPress={() => setShowAddContactModal(false)}
+                    >
+                      <Text style={styles.cancelButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                      style={[styles.button, styles.addContactButton]}
+                      onPress={addContact}
+                    >
+                      <Text style={styles.modalButtonText}>Add Contact</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </View>
-            </View>
+            </TouchableWithoutFeedback>
           </View>
-        </View>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   );
@@ -1110,48 +1120,58 @@ const styles = StyleSheet.create({
   // Floating Add Contact Button
   floatingAddButton: {
     position: 'absolute',
-    bottom: 90, // Position above navbar
+    bottom: 56,
     left: 0,
     right: 0,
     backgroundColor: COLORS.primary, // App's purple color
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    zIndex: 10000,
+    paddingVertical: 14,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.3)',
+    borderTopColor: 'rgba(255,255,255,0.2)',
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    zIndex: 10000,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 4,
   },
   floatingAddButtonText: {
     color: 'white',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginLeft: 10,
-    letterSpacing: 0.5,
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
+    marginLeft: 8,
+    letterSpacing: 0.3,
   },
   // Modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainerWrapper: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+    // Don't handle touches on the wrapper, let them pass through to the overlay
   },
   modalContainer: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderRadius: 20,
     padding: SPACING.lg,
+    paddingBottom: SPACING.xs,
+    width: '95%',
     maxHeight: '80%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.xs,
   },
   modalTitle: {
     fontSize: FONT_SIZES.lg,
@@ -1162,7 +1182,8 @@ const styles = StyleSheet.create({
     padding: SPACING.xs,
   },
   formContainer: {
-    marginTop: SPACING.md,
+    marginTop: 0,
+    paddingBottom: SPACING.sm,
   },
   modalNote: {
     fontSize: FONT_SIZES.sm,
@@ -1202,14 +1223,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: SPACING.lg,
+    marginBottom: SPACING.lg,
+    paddingHorizontal: SPACING.xs,
   },
   button: {
     flex: 1,
     height: 50,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 10,
     marginHorizontal: SPACING.xs,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
   },
   cancelButton: {
     backgroundColor: '#F3F4F6',
@@ -1218,6 +1246,7 @@ const styles = StyleSheet.create({
   },
   addContactButton: {
     backgroundColor: COLORS.primary,
+    borderWidth: 0,
   },
   modalButtonText: {
     fontSize: FONT_SIZES.md,
