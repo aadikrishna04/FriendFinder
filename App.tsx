@@ -8,6 +8,8 @@ import BottomTabs from './src/components/BottomTabs'
 const SplashScreen = require('./src/screens/SplashScreen').default;
 const SignInScreen = require('./src/screens/SignInScreen').default;
 const SignUpScreen = require('./src/screens/SignUpScreen').default;
+const OnbResume = require('./src/screens/OnbResume').default;
+const OnbTags = require('./src/screens/OnbTags').default;
 
 // Import Supabase client
 import { supabase } from './src/services/supabaseClient';
