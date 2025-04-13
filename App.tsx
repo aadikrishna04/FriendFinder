@@ -1,16 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
-import { Session } from '@supabase/supabase-js';
-import { CardStyleInterpolators } from '@react-navigation/stack';
-import BottomTabs from './src/components/BottomTabs'
+import React, { useState, useEffect } from "react";
+import { NavigationContainer } from "@react-navigation/native";
+import { createStackNavigator } from "@react-navigation/stack";
+import { Session } from "@supabase/supabase-js";
+import { CardStyleInterpolators } from "@react-navigation/stack";
+import BottomTabs from "./src/components/BottomTabs";
 // Import screens using require to avoid TypeScript errors
-const SplashScreen = require('./src/screens/SplashScreen').default;
-const SignInScreen = require('./src/screens/SignInScreen').default;
-const SignUpScreen = require('./src/screens/SignUpScreen').default;
+const SplashScreen = require("./src/screens/SplashScreen").default;
+const SignInScreen = require("./src/screens/SignInScreen").default;
+const SignUpScreen = require("./src/screens/SignUpScreen").default;
+const OnboardingScreen = require("./src/screens/OnboardingScreen").default;
+const MapScreen = require("./src/screens/MapScreen").default;
 
 // Import Supabase client
-import { supabase } from './src/services/supabaseClient';
+import { supabase } from "./src/services/supabaseClient";
 
 const Stack = createStackNavigator();
 const AuthStack = createStackNavigator();
@@ -18,14 +20,14 @@ const AuthStack = createStackNavigator();
 // Auth navigator component with custom transitions
 const AuthNavigator = () => {
   return (
-    <AuthStack.Navigator 
-      screenOptions={{ 
+    <AuthStack.Navigator
+      screenOptions={{
         headerShown: false,
       }}
     >
-      <AuthStack.Screen 
-        name="SignIn" 
-        component={SignInScreen} 
+      <AuthStack.Screen
+        name="SignIn"
+        component={SignInScreen}
         options={{
           cardStyleInterpolator: ({ current, layouts }) => {
             return {
@@ -43,9 +45,23 @@ const AuthNavigator = () => {
           },
         }}
       />
-      <AuthStack.Screen 
-        name="SignUp" 
-        component={SignUpScreen} 
+      <AuthStack.Screen
+        name="SignUp"
+        component={SignUpScreen}
+        options={{
+          cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+        }}
+      />
+      <AuthStack.Screen
+        name="OnboardingScreen"
+        component={OnboardingScreen}
+        options={{
+          cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+        }}
+      />
+      <AuthStack.Screen
+        name="MapScreen"
+        component={MapScreen}
         options={{
           cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
         }}
@@ -72,7 +88,9 @@ export default function App() {
     });
 
     // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
@@ -101,5 +119,4 @@ export default function App() {
       </Stack.Navigator>
     </NavigationContainer>
   );
-  
 }

@@ -9,10 +9,11 @@ import EventDetailsScreen from "../screens/EventDetailsScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import UserProfileScreen from "../screens/UserProfileScreen";
 import NotificationScreen from "../screens/NotificationScreen";
+import OnboardingScreen from "../screens/OnboardingScreen";
 import Icon from "react-native-vector-icons/Ionicons"; // or MaterialIcons, Feather etc.
-import { TouchableOpacity, Platform } from 'react-native';
-import GroupsScreen from '../screens/GroupsScreen';
-import GroupDetailScreen from '../screens/GroupDetailScreen';
+import { TouchableOpacity, Platform } from "react-native";
+import GroupsScreen from "../screens/GroupsScreen";
+import GroupDetailScreen from "../screens/GroupDetailScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -22,6 +23,7 @@ const EventsStack = () => {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="EventsList" component={EventsScreen} />
+      <Stack.Screen name="OnboardingScreen" component={OnboardingScreen} />
       <Stack.Screen name="CreateEvent" component={CreateEventScreen} />
       <Stack.Screen name="EditEvent" component={EditEventScreen} />
       <Stack.Screen name="EventDetails" component={EventDetailsScreen} />
@@ -38,6 +40,7 @@ const MapStack = () => {
       <Stack.Screen name="MapView" component={MapScreen} />
       <Stack.Screen name="EventDetails" component={EventDetailsScreen} />
       <Stack.Screen name="EditEventScreen" component={EditEventScreen} />
+      <Stack.Screen name="OnboardingScreen" component={OnboardingScreen} />
       <Stack.Screen name="Profile" component={ProfileScreen} />
       <Stack.Screen name="UserProfile" component={UserProfileScreen} />
     </Stack.Navigator>
@@ -58,7 +61,10 @@ const NotificationsStack = () => {
 // Groups stack navigator
 const GroupsStack = () => {
   return (
-    <Stack.Navigator initialRouteName="GroupsScreen" screenOptions={{ headerShown: false }}>
+    <Stack.Navigator
+      initialRouteName="GroupsScreen"
+      screenOptions={{ headerShown: false }}
+    >
       <Stack.Screen name="GroupsScreen" component={GroupsScreen} />
       <Stack.Screen name="GroupDetail" component={GroupDetailScreen} />
       <Stack.Screen name="Profile" component={ProfileScreen} />
@@ -92,19 +98,19 @@ const BottomTabs = () => {
         tabBarStyle: {
           backgroundColor: "#ebebeb",
           paddingTop: 10,
-          height: Platform.OS === 'ios' ? 90 : 70,
-          paddingBottom: Platform.OS === 'ios' ? 25 : 10,
+          height: Platform.OS === "ios" ? 90 : 70,
+          paddingBottom: Platform.OS === "ios" ? 25 : 10,
           borderTopLeftRadius: 20,
           borderTopRightRadius: 20,
           borderLeftWidth: 0.2,
           borderRightWidth: 0.2,
           borderTopWidth: 0.2,
-          position: 'absolute',
-          overflow: 'hidden',
+          position: "absolute",
+          overflow: "hidden",
         },
         tabBarLabelStyle: {
           fontSize: 12,
-          fontWeight: '600',
+          fontWeight: "600",
           paddingBottom: 5,
         },
       })}

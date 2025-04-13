@@ -1,43 +1,44 @@
-import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  SafeAreaView, 
-  KeyboardAvoidingView, 
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  KeyboardAvoidingView,
   Platform,
   Alert,
-  TouchableOpacity
-} from 'react-native';
-import { Button, Input, FriendAvatars } from '../components';
-import { signUp } from '../services/authService';
-import { COLORS, SPACING, FONT_SIZES, LAYOUT } from '../constants';
+  TouchableOpacity,
+} from "react-native";
+import { Button, Input, FriendAvatars } from "../components";
+import { signUp } from "../services/authService";
+import { COLORS, SPACING, FONT_SIZES, LAYOUT } from "../constants";
 
 const SignUpScreen = ({ navigation }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
 
   const validateForm = () => {
     const newErrors = {};
-    
-    if (!email) newErrors.email = 'Email is required';
-    else if (!/\S+@\S+\.\S+/.test(email)) newErrors.email = 'Email is invalid';
-    
-    if (!password) newErrors.password = 'Password is required';
-    else if (password.length < 6) newErrors.password = 'Password must be at least 6 characters';
-    
-    if (!fullName) newErrors.fullName = 'Full Name is required';
-    
-    if (!phoneNumber) newErrors.phoneNumber = 'Phone Number is required';
-    else if (!/^\d{10}$/.test(phoneNumber.replace(/\D/g, ''))) {
-      newErrors.phoneNumber = 'Please enter a valid 10-digit phone number';
+
+    if (!email) newErrors.email = "Email is required";
+    else if (!/\S+@\S+\.\S+/.test(email)) newErrors.email = "Email is invalid";
+
+    if (!password) newErrors.password = "Password is required";
+    else if (password.length < 6)
+      newErrors.password = "Password must be at least 6 characters";
+
+    if (!fullName) newErrors.fullName = "Full Name is required";
+
+    if (!phoneNumber) newErrors.phoneNumber = "Phone Number is required";
+    else if (!/^\d{10}$/.test(phoneNumber.replace(/\D/g, ""))) {
+      newErrors.phoneNumber = "Please enter a valid 10-digit phone number";
     }
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -46,22 +47,22 @@ const SignUpScreen = ({ navigation }) => {
     if (!validateForm()) {
       return;
     }
-    
+
     setLoading(true);
-    
+
     try {
       // Format phone number consistently
-      const formattedPhoneNumber = phoneNumber.replace(/\D/g, '');
-      
-      await signUp(email, password, { 
+      const formattedPhoneNumber = phoneNumber.replace(/\D/g, "");
+
+      await signUp(email, password, {
         name: fullName,
-        phoneNumber: formattedPhoneNumber
+        phoneNumber: formattedPhoneNumber,
       });
-      
+
       // Navigate to SignIn without showing an alert
-      navigation.navigate('SignIn');
+      navigation.navigate("OnboardingScreen");
     } catch (error) {
-      Alert.alert('Sign Up Failed', error.message);
+      Alert.alert("Sign Up Failed", error.message);
     } finally {
       setLoading(false);
     }
@@ -73,18 +74,18 @@ const SignUpScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.container}
       >
         <View style={styles.header}>
           <Text style={styles.title}>Create Account</Text>
         </View>
-        
+
         <View style={styles.avatarSection}>
           <FriendAvatars variant="small" />
         </View>
-        
+
         <View style={styles.formContainer}>
           <Input
             placeholder="Full Name"
@@ -93,7 +94,7 @@ const SignUpScreen = ({ navigation }) => {
             error={errors.fullName}
             errorText={errors.fullName}
           />
-          
+
           <Input
             placeholder="Email"
             value={email}
@@ -103,7 +104,7 @@ const SignUpScreen = ({ navigation }) => {
             error={errors.email}
             errorText={errors.email}
           />
-          
+
           <Input
             placeholder="Phone Number"
             value={phoneNumber}
@@ -112,7 +113,7 @@ const SignUpScreen = ({ navigation }) => {
             error={errors.phoneNumber}
             errorText={errors.phoneNumber}
           />
-          
+
           <View style={styles.passwordContainer}>
             <Input
               placeholder="Password"
@@ -121,18 +122,18 @@ const SignUpScreen = ({ navigation }) => {
               secureTextEntry={!showPassword}
               error={errors.password}
               errorText={errors.password}
-              style={{flex: 1}}
+              style={{ flex: 1 }}
             />
-            <TouchableOpacity 
-              style={styles.eyeIcon} 
+            <TouchableOpacity
+              style={styles.eyeIcon}
               onPress={togglePasswordVisibility}
             >
               <Text style={styles.eyeIconText}>
-                {showPassword ? '👁️' : '👁️‍🗨️'}
+                {showPassword ? "👁️" : "👁️‍🗨️"}
               </Text>
             </TouchableOpacity>
           </View>
-          
+
           <Button
             title="Create Account"
             onPress={handleSignUp}
@@ -140,10 +141,10 @@ const SignUpScreen = ({ navigation }) => {
             disabled={loading}
             style={styles.button}
           />
-          
+
           <Button
             title="Already have an account? Sign In"
-            onPress={() => navigation.navigate('SignIn')}
+            onPress={() => navigation.navigate("SignIn")}
             variant="secondary"
             style={styles.secondaryButton}
           />
@@ -164,29 +165,29 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: FONT_SIZES.xxl,
-    fontWeight: 'bold',
-    textAlign: 'center',
+    fontWeight: "bold",
+    textAlign: "center",
     color: COLORS.text,
   },
   avatarSection: {
-    alignItems: 'center',
+    alignItems: "center",
     paddingVertical: SPACING.md,
   },
   formContainer: {
     paddingHorizontal: SPACING.lg,
   },
   passwordContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     marginBottom: SPACING.md,
-    position: 'relative',
+    position: "relative",
   },
   eyeIcon: {
-    position: 'absolute',
+    position: "absolute",
     right: SPACING.md,
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: SPACING.sm,
     zIndex: 1,
     top: -3,
@@ -211,4 +212,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default SignUpScreen; 
+export default SignUpScreen;
