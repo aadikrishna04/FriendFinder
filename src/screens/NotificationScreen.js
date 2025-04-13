@@ -34,7 +34,8 @@ const NotificationScreen = ({ navigation }) => {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (userError) throw userError;
-      if (!user) {
+      if (!user || !user.id) {
+        console.log('No valid user found, redirecting to sign in');
         navigation.replace('SignIn');
         return;
       }
@@ -117,6 +118,11 @@ const NotificationScreen = ({ navigation }) => {
   };
 
   const handleNotificationPress = (notification) => {
+    if (!notification || !notification.id) {
+      console.error('Invalid notification object:', notification);
+      return;
+    }
+    
     // Mark the notification as read
     if (!notification.is_read) {
       markAsRead(notification.id);
@@ -159,6 +165,12 @@ const NotificationScreen = ({ navigation }) => {
   // Add function to update invitation status
   const updateInvitationStatus = async (invitationId, status) => {
     try {
+      if (!invitationId) {
+        console.error('Invalid invitation ID: undefined');
+        Alert.alert('Error', 'Invalid invitation ID');
+        return;
+      }
+      
       const { error } = await supabase
         .from('event_invitations')
         .update({ status })

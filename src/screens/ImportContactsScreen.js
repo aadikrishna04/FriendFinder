@@ -172,24 +172,56 @@ const ImportContactsScreen = ({ navigation, route }) => {
       }
       
       // Prepare contacts for insertion
-      const contactsToInsert = selectedContacts.map(contact => {
+      const contactsToInsert = [];
+      
+      for (const contact of selectedContacts) {
         let userId = null;
+        let email = contact.email;
+        let phoneNumber = contact.phoneNumber;
         
-        // Check if this contact is a registered user
-        if (contact.email && userMap.has(contact.email)) {
-          userId = userMap.get(contact.email);
-        } else if (contact.phoneNumber && userMap.has(contact.phoneNumber)) {
-          userId = userMap.get(contact.phoneNumber);
+        // Check if this contact is a registered user by email
+        if (email && userMap.has(email)) {
+          userId = userMap.get(email);
+          
+          // If phone number is missing, look it up
+          if (!phoneNumber) {
+            const { data: userData } = await supabase
+              .from('users')
+              .select('phone_number')
+              .eq('id', userId)
+              .single();
+              
+            if (userData && userData.phone_number) {
+              phoneNumber = userData.phone_number;
+            }
+          }
+        } 
+        // Check if this contact is a registered user by phone number
+        else if (phoneNumber && userMap.has(phoneNumber)) {
+          userId = userMap.get(phoneNumber);
+          
+          // If email is missing, look it up
+          if (!email) {
+            const { data: userData } = await supabase
+              .from('users')
+              .select('email')
+              .eq('id', userId)
+              .single();
+              
+            if (userData && userData.email) {
+              email = userData.email;
+            }
+          }
         }
         
-        return {
+        contactsToInsert.push({
           owner_id: user.id,
           contact_id: userId,
           name: contact.name,
-          email: contact.email,
-          phone_number: contact.phoneNumber
-        };
-      });
+          email: email,
+          phone_number: phoneNumber
+        });
+      }
       
       // Insert contacts in batches to avoid timeout
       const batchSize = 50;
@@ -209,6 +241,50 @@ const ImportContactsScreen = ({ navigation, route }) => {
           errorCount += batch.length;
         } else {
           successCount += data.length;
+          
+          // For bidirectional contact adding, add the current user as a contact for each added user
+          // Only do this for contacts who are registered app users (have a contact_id)
+          for (const addedContact of data) {
+            if (addedContact.contact_id) {
+              // Get current user's details
+              const { data: currentUserData } = await supabase
+                .from('users')
+                .select('name, email, phone_number')
+                .eq('id', user.id)
+                .single();
+              
+              // Check if the current user is already in the other user's contacts
+              const { data: reverseExistingContact } = await supabase
+                .from('contacts')
+                .select('id')
+                .eq('owner_id', addedContact.contact_id)
+                .eq('contact_id', user.id)
+                .single();
+                
+              if (!reverseExistingContact) {
+                // Ensure we have the most complete user data for the reverse contact
+                const userName = currentUserData?.name || user.email?.split('@')[0] || 'User';
+                const userEmail = currentUserData?.email || user.email;
+                const userPhone = currentUserData?.phone_number || null;
+                
+                // Add the current user as a contact for the added user
+                const { error: reverseInsertError } = await supabase
+                  .from('contacts')
+                  .insert({
+                    owner_id: addedContact.contact_id,
+                    contact_id: user.id,
+                    name: userName,
+                    email: userEmail,
+                    phone_number: userPhone
+                  });
+                  
+                if (reverseInsertError) {
+                  console.error('Error adding reverse contact:', reverseInsertError);
+                  // We can continue even if the reverse contact insertion fails
+                }
+              }
+            }
+          }
         }
       }
       
