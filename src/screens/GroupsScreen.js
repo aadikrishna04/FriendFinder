@@ -6,6 +6,7 @@ import {
   SafeAreaView,
   FlatList,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Alert,
   ActivityIndicator,
   TextInput,
@@ -316,8 +317,13 @@ const GroupsScreen = ({ navigation }) => {
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={{flex: 1}}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContainer}>
+          <TouchableOpacity 
+            activeOpacity={1}
+            style={styles.modalOverlay}
+            onPress={() => setCreateGroupModalVisible(false)}
+          >
+            <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
+              <View style={styles.modalContainer}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Create New Group</Text>
                 <TouchableOpacity
@@ -355,8 +361,9 @@ const GroupsScreen = ({ navigation }) => {
                   </TouchableOpacity>
                 </View>
               </View>
-            </View>
-          </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </TouchableOpacity>
         </KeyboardAvoidingView>
       </Modal>
     );
