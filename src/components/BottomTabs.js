@@ -1,7 +1,6 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createStackNavigator } from "@react-navigation/stack";
-import ProfileScreen from "../screens/ProfileScreen";
 import MapScreen from "../screens/MapScreen";
 import EventsScreen from "../screens/EventsScreen";
 import CreateEventScreen from "../screens/CreateEventScreen";
@@ -47,8 +46,6 @@ const BottomTabs = () => {
             iconName = focused ? "map" : "map-outline";
           } else if (route.name === "My Events") {
             iconName = focused ? "calendar" : "calendar-outline";
-          } else if (route.name === "Profile") {
-            iconName = focused ? "person" : "person-outline";
           }
 
           return <Icon name={iconName} size={size} color={color} />;
@@ -57,14 +54,13 @@ const BottomTabs = () => {
         tabBarInactiveTintColor: "gray",
         tabBarStyle: {
           backgroundColor: "#ebebeb",
-          paddingTop: 10, // 👈 Adds top padding
-          height: 90, // Make sure the height is enough to include padding
+          paddingTop: 10,
+          height: 90,
         },
       })}
     >
       <Tab.Screen name="Map" component={MapStack} />
       <Tab.Screen name="My Events" component={EventsStack} />
-      <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 };

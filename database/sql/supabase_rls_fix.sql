@@ -25,8 +25,17 @@ USING (true);
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.users (id, name, email, avatar_url, calendar)
-  VALUES (NEW.id, NEW.raw_user_meta_data->>'name', NEW.email, null, '[]');
+  INSERT INTO public.users (id, name, email, avatar_url, calendar, phone_number, resume, tags)
+  VALUES (
+    NEW.id, 
+    NEW.raw_user_meta_data->>'name', 
+    NEW.email, 
+    null, 
+    '[]'::jsonb,
+    NEW.raw_user_meta_data->>'phoneNumber',
+    null,
+    '[]'::jsonb
+  );
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

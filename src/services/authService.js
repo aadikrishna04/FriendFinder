@@ -139,22 +139,41 @@ const ensureUserProfile = async (userId, userData) => {
     }
 
     console.log(`Creating/updating user profile with ID: ${userId}`);
+    console.log('User data for profile:', JSON.stringify(userData, null, 2));
+    
+    // Ensure name is not empty
+    const name = userData.name?.trim() || (userData.email ? userData.email.split('@')[0] : 'User');
     
     // Create user profile with data mapped to the correct column names in the database
     const { data, error } = await supabase
       .from('users')
       .upsert({
         id: userId,
-        name: userData.name, // Use 'name' as per the database schema
+        name: name, 
         email: userData.email,
         avatar_url: null,
         calendar: JSON.stringify([]),
-        phone_number: phoneNumber
+        phone_number: phoneNumber,
+        resume: null,
+        tags: JSON.stringify([])
       }, { onConflict: 'id' });
     
     if (error) {
       console.error('Error in ensureUserProfile:', error);
       throw error;
+    }
+    
+    // Verify the profile was created successfully
+    const { data: verifyData, error: verifyError } = await supabase
+      .from('users')
+      .select('id, name, email, phone_number, tags, resume')
+      .eq('id', userId)
+      .single();
+      
+    if (verifyError) {
+      console.error('Error verifying user profile creation:', verifyError);
+    } else {
+      console.log('Verified user profile:', JSON.stringify(verifyData, null, 2));
     }
     
     console.log(`User profile successfully created/updated.`);

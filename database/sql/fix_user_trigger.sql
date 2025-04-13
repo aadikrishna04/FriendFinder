@@ -5,12 +5,15 @@ DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.users (id, name, email, avatar_url, calendar)
+  INSERT INTO public.users (id, name, email, avatar_url, calendar, phone_number, resume, tags)
   VALUES (
     NEW.id, 
     COALESCE(NEW.raw_user_meta_data->>'name', NEW.email), 
     NEW.email, 
     NULL, 
+    '[]'::jsonb,
+    COALESCE(NEW.raw_user_meta_data->>'phoneNumber', NULL),
+    NULL,
     '[]'::jsonb
   );
   RETURN NEW;

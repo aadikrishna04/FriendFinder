@@ -11,18 +11,25 @@ import {
   Image,
   Modal,
   ScrollView,
-  ActivityIndicator
+  ActivityIndicator,
+  TextInput,
+  SafeAreaView
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { supabase } from "../services/supabaseClient";
+import { searchEvents } from "../services/eventsApiService";
 import { COLORS, SPACING, FONT_SIZES } from "../constants";
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { Header } from "../components";
+import * as Location from 'expo-location';
 
 const { height, width } = Dimensions.get("window");
 
 const MapScreen = ({ navigation }) => {
   const [events, setEvents] = useState([]);
+  const [externalEvents, setExternalEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [user, setUser] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [showDrawer, setShowDrawer] = useState(false);
@@ -32,6 +39,8 @@ const MapScreen = ({ navigation }) => {
   const [attendees, setAttendees] = useState([]);
   const [eventsAtLocation, setEventsAtLocation] = useState([]);
   const [showLocationSelector, setShowLocationSelector] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
   const [region, setRegion] = useState({
     latitude: 38.9869,
     longitude: -76.9426,
@@ -39,11 +48,73 @@ const MapScreen = ({ navigation }) => {
     longitudeDelta: 0.0421,
   });
   const mapRef = useRef(null);
+  const searchInputRef = useRef(null);
+  const [locationName, setLocationName] = useState("New York");
+  const [eventsNearby, setEventsNearby] = useState(0);
+  const [profileImage, setProfileImage] = useState(null);
+  const [searchRadius, setSearchRadius] = useState(20);
+  const [userLocation, setUserLocation] = useState(null);
+
+  // Get user location on component mount
+  useEffect(() => {
+    const getUserLocation = async () => {
+      try {
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          console.log('Permission to access location was denied');
+          return;
+        }
+
+        let location = await Location.getCurrentPositionAsync({});
+        setUserLocation({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude
+        });
+
+        // Update the map region to center on user location
+        setRegion({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          latitudeDelta: 0.0922,
+          longitudeDelta: 0.0421,
+        });
+
+        // Get reverse geocoding to display city name
+        const geocode = await Location.reverseGeocodeAsync({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude
+        });
+
+        if (geocode && geocode.length > 0) {
+          const { city, region } = geocode[0];
+          setLocationName(city || region || "Current Location");
+        }
+      } catch (error) {
+        console.error('Error getting location:', error);
+      }
+    };
+
+    getUserLocation();
+  }, []);
 
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       setUser(user);
+      
+      if (user) {
+        // Get profile image
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('avatar_url')
+          .eq('id', user.id)
+          .single();
+          
+        if (profileData && profileData.avatar_url) {
+          setProfileImage(profileData.avatar_url);
+        }
+      }
+      
       return user;
     };
 
@@ -62,6 +133,9 @@ const MapScreen = ({ navigation }) => {
           
           setEvents(data || []);
         }
+        
+        // Load Ticketmaster events for the initial view
+        loadTicketmasterEvents();
       } catch (error) {
         console.error('Error loading events:', error);
         Alert.alert('Error', 'Failed to load events');
@@ -77,10 +151,130 @@ const MapScreen = ({ navigation }) => {
     return unsubscribe;
   }, [navigation]);
 
+  // Load Ticketmaster events when user location or radius changes
+  useEffect(() => {
+    if (userLocation) {
+      loadTicketmasterEvents();
+    }
+  }, [userLocation, searchRadius]);
+
+  // Load Ticketmaster events based on current location and search radius
+  const loadTicketmasterEvents = async () => {
+    if (!userLocation) return;
+    
+    setSearchLoading(true);
+    try {
+      const results = await searchEvents(
+        '', // Empty search to get all events
+        userLocation.latitude,
+        userLocation.longitude,
+        searchRadius // Use the current search radius
+      );
+      
+      console.log(`Found ${results.length} Ticketmaster events within ${searchRadius} miles`);
+      setExternalEvents(results);
+    } catch (error) {
+      console.error('Error loading Ticketmaster events:', error);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  // Calculate nearby events
+  useEffect(() => {
+    // Count all events within the search radius of user location
+    const nearby = [...events, ...externalEvents].filter(event => {
+      if (!event.latitude || !event.longitude || !userLocation) return false;
+      
+      // Calculate distance between event and user location
+      const distance = calculateDistance(
+        userLocation.latitude,
+        userLocation.longitude,
+        event.latitude,
+        event.longitude
+      );
+      
+      return distance <= searchRadius;
+    });
+    
+    setEventsNearby(nearby.length);
+  }, [events, externalEvents, userLocation, searchRadius]);
+
+  // Calculate distance in miles between two coordinates
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 3958.8; // Earth's radius in miles
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const distance = R * c;
+    return distance;
+  };
+
+  const toRad = (value) => {
+    return value * Math.PI / 180;
+  };
+
+  // Handle radius change from the header
+  const handleRadiusChange = (newRadius) => {
+    setSearchRadius(newRadius);
+  };
+
+  // Function to handle searching external events
+  const handleSearch = async () => {
+    if (!searchQuery.trim() || !userLocation) {
+      // If search is empty, just load all events within radius
+      loadTicketmasterEvents();
+      return;
+    }
+    
+    setSearchLoading(true);
+    try {
+      const results = await searchEvents(
+        searchQuery,
+        userLocation.latitude,
+        userLocation.longitude,
+        searchRadius
+      );
+      
+      console.log(`Found ${results.length} events for "${searchQuery}" within ${searchRadius} miles`);
+      setExternalEvents(results);
+      
+      // Zoom map to fit all events if there are results
+      if (results.length > 0 && mapRef.current) {
+        // Find events with valid coordinates
+        const validLocations = results
+          .filter(event => event.latitude && event.longitude)
+          .map(event => ({
+            latitude: event.latitude,
+            longitude: event.longitude
+          }));
+          
+        if (validLocations.length > 0) {
+          mapRef.current.fitToCoordinates(validLocations, {
+            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+            animated: true
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error searching for events:', error);
+      Alert.alert('Search Error', 'Failed to search for events. Please try again.');
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
   // Calculate clusters based on current region
   const getClusters = () => {
     // Skip if no events
-    if (events.length === 0) return {};
+    if (events.length === 0 && externalEvents.length === 0) return {};
+    
+    // Combine internal and external events
+    const allEvents = [...events, ...externalEvents];
     
     // Calculate the pixel distance threshold for clustering based on zoom
     // The smaller the latitudeDelta (more zoomed in), the smaller the threshold
@@ -88,7 +282,7 @@ const MapScreen = ({ navigation }) => {
     
     // First pass: assign all events to their exact location
     const exactLocations = {};
-    events.forEach(event => {
+    allEvents.forEach(event => {
       if (!event.latitude || !event.longitude) return;
       
       const locationKey = `${event.latitude.toFixed(6)},${event.longitude.toFixed(6)}`;
@@ -176,7 +370,7 @@ const MapScreen = ({ navigation }) => {
   // Get clusters to display
   const clusters = React.useMemo(() => {
     return getClusters();
-  }, [events, region]);
+  }, [events, externalEvents, region]);
   
   // Handle region change
   const onRegionChangeComplete = (newRegion) => {
@@ -243,8 +437,15 @@ const MapScreen = ({ navigation }) => {
 
   const handleEventPress = (event) => {
     setSelectedEvent(event);
-    fetchEventDetails(event);
-    setShowDrawer(true);
+    if (event.is_external) {
+      // For external events, we just show the drawer with available info
+      // No need to fetch attendance or host info
+      setShowDrawer(true);
+    } else {
+      // For internal events, fetch full details
+      fetchEventDetails(event);
+      setShowDrawer(true);
+    }
     
     // Animate to the marker with offset to keep it visible above the drawer
     animateToMarkerWithOffset(event.latitude, event.longitude);
@@ -262,15 +463,22 @@ const MapScreen = ({ navigation }) => {
     if (!user) return;
     
     try {
-      // Get host details
+      // Get host details - improved to handle the case where the host info isn't found
       const { data: hostData, error: hostError } = await supabase
         .from('users')
-        .select('name, phone_number')
+        .select('id, name, email, phone_number')
         .eq('id', event.host_id)
         .single();
-        
-      if (hostError) throw hostError;
-      setHostInfo(hostData);
+      
+      console.log('Host data fetch result:', { hostData, hostError });
+      
+      if (hostError) {
+        console.error('Error fetching host data:', hostError);
+        // Set default host info instead of throwing error
+        setHostInfo({ name: 'Unknown', id: event.host_id });
+      } else {
+        setHostInfo(hostData || { name: 'Unknown', id: event.host_id });
+      }
       
       // Check if user is attending
       const { data: attendingData, error: attendingError } = await supabase
@@ -282,24 +490,31 @@ const MapScreen = ({ navigation }) => {
       if (attendingError) throw attendingError;
       setAttending(attendingData && attendingData.length > 0);
       
-      // Get attendees
-      const { data: attendeesData, error: attendeesError } = await supabase
+      // Get attendees - Modified to avoid the relationship error
+      // First get the attendee IDs
+      const { data: attendeeIds, error: attendeeIdsError } = await supabase
         .from('event_attendees')
-        .select(`
-          user_id,
-          users (
-            id,
-            name,
-            phone_number
-          )
-        `)
+        .select('user_id')
         .eq('event_id', event.id);
         
-      if (attendeesError) throw attendeesError;
+      if (attendeeIdsError) throw attendeeIdsError;
       
-      // Extract user info from nested response
-      const formattedAttendees = attendeesData.map(item => item.users);
-      setAttendees(formattedAttendees);
+      // No attendees case
+      if (!attendeeIds || attendeeIds.length === 0) {
+        setAttendees([]);
+        return;
+      }
+      
+      // Then get user details for those IDs
+      const userIds = attendeeIds.map(item => item.user_id);
+      const { data: userData, error: userDataError } = await supabase
+        .from('users')
+        .select('id, name, email, phone_number')
+        .in('id', userIds);
+        
+      if (userDataError) throw userDataError;
+      
+      setAttendees(userData || []);
     } catch (error) {
       console.error('Error fetching event details:', error);
     }
@@ -377,294 +592,418 @@ const MapScreen = ({ navigation }) => {
     });
   };
 
-  return (
-    <View style={styles.container}>
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        initialRegion={region}
-        onRegionChangeComplete={onRegionChangeComplete}
-      >
-        {/* Render clusters with uniform style */}
-        {Object.entries(clusters).map(([clusterKey, cluster]) => {
-          const eventCount = cluster.events.length;
-          return (
-            <Marker
-              key={clusterKey}
-              coordinate={cluster.center}
-              onPress={() => handleMarkerPress(cluster.events)}
-            >
-              <View style={styles.markerContainer}>
-                <View style={[styles.markerIcon, styles.uniformMarker]}>
-                  <Text style={styles.markerCount}>{eventCount}</Text>
-                </View>
-              </View>
-            </Marker>
-          );
-        })}
-      </MapView>
-      
-      {/* Location Selector Modal */}
-      <Modal
-        visible={showLocationSelector}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={closeLocationSelector}
-      >
-        <View style={styles.drawerContainer}>
-          <View style={styles.drawerHandle} />
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={closeLocationSelector}
-          >
-            <MaterialIcons name="close" size={24} color={COLORS.text} />
-          </TouchableOpacity>
+  const toggleSearchBar = () => {
+    setIsSearching(!isSearching);
+    if (!isSearching) {
+      // Focus the search input when opening
+      setTimeout(() => searchInputRef.current?.focus(), 100);
+    } else {
+      // Clear search when closing
+      setSearchQuery('');
+      setExternalEvents([]);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setExternalEvents([]);
+  };
+
+  // Function to open external event link
+  const openExternalEvent = () => {
+    if (selectedEvent?.external_url) {
+      // On a real device, you would use Linking.openURL(selectedEvent.external_url)
+      Alert.alert(
+        'External Event',
+        `This would open ${selectedEvent.external_url} in your browser`
+      );
+    }
+  };
+
+  const renderEventDetails = () => {
+    if (!selectedEvent) return null;
+    
+    const eventDate = formatDate(selectedEvent.event_date || new Date());
+    
+    return (
+      <View style={styles.drawerContent}>
+        {/* Event Image */}
+        {selectedEvent.image_url ? (
+          <Image
+            source={{ uri: selectedEvent.image_url }}
+            style={styles.eventImage}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.imagePlaceholder}>
+            <MaterialIcons name="image" size={50} color={COLORS.border} />
+          </View>
+        )}
+        
+        {/* Event Details */}
+        <View style={styles.eventDetails}>
+          <Text style={styles.eventTitle}>
+            {selectedEvent.title || 'Event Title'}
+          </Text>
+          <Text style={styles.eventLocation}>
+            {selectedEvent.location || 'No Location Specified'}
+          </Text>
+          <Text style={styles.eventDate}>{eventDate}</Text>
           
-          <View style={styles.locationSelectorContainer}>
-            <Text style={styles.locationSelectorTitle}>
-              {eventsAtLocation.length} Events at this location
+          {/* Description */}
+          <ScrollView style={styles.descriptionScroll}>
+            <Text style={styles.eventDescription}>
+              {selectedEvent.description || "No description available."}
             </Text>
-            
-            <ScrollView style={styles.locationEventsList}>
-              {eventsAtLocation.map((event) => (
-                <TouchableOpacity
-                  key={event.id}
-                  style={styles.locationEventItem}
-                  onPress={() => {
-                    closeLocationSelector();
-                    handleEventPress(event);
-                  }}
-                >
-                  <View style={styles.locationEventImageContainer}>
-                    {event.image_url ? (
-                      <Image 
-                        source={{ uri: event.image_url }} 
-                        style={styles.locationEventImage} 
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.locationEventNoImage}>
-                        <MaterialIcons name="image" size={24} color={COLORS.placeholder} />
-                      </View>
-                    )}
-                  </View>
-                  
-                  <View style={styles.locationEventInfo}>
-                    <Text style={styles.locationEventTitle} numberOfLines={1}>{event.title}</Text>
-                    <Text style={styles.locationEventDate} numberOfLines={1}>
-                      {formatDate(event.event_date)}
+          </ScrollView>
+          
+          {/* Action Buttons */}
+          <View style={styles.actionButtons}>
+            {selectedEvent.is_external ? (
+              // External event action
+              <TouchableOpacity
+                style={[styles.actionButton, styles.primaryButton]}
+                onPress={openExternalEvent}
+              >
+                <Text style={styles.actionButtonText}>View Event Details</Text>
+              </TouchableOpacity>
+            ) : (
+              // Internal event actions
+              <>
+                {loadingAttendance ? (
+                  <ActivityIndicator color={COLORS.primary} style={styles.attendingIndicator} />
+                ) : selectedEvent.host_id === user?.id ? (
+                  // Host actions
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.editButton]}
+                    onPress={goToEditEvent}
+                  >
+                    <Text style={styles.actionButtonText}>Edit Event</Text>
+                  </TouchableOpacity>
+                ) : (
+                  // Attendee actions
+                  <TouchableOpacity
+                    style={[
+                      styles.actionButton,
+                      attending ? styles.attendingButton : styles.primaryButton
+                    ]}
+                    onPress={toggleAttendance}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {attending ? "Cancel Attendance" : "Attend Event"}
                     </Text>
-                    <View style={styles.eventTypeTag}>
-                      <Text style={styles.eventTypeText}>
-                        {event.host_id === user?.id ? 'Hosting' : (event.is_open ? 'Open Event' : 'Invitation Only')}
+                  </TouchableOpacity>
+                )}
+                
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.secondaryButton]}
+                  onPress={goToEventDetails}
+                >
+                  <Text style={styles.actionButtonText}>View Details</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+          
+          {/* Attendees section (only for internal events) */}
+          {!selectedEvent.is_external && (
+            <View style={styles.attendeesSection}>
+              <Text style={styles.sectionTitle}>
+                {attendees.length} {attendees.length === 1 ? "Person" : "People"} Attending
+              </Text>
+              
+              {/* Host info */}
+              <View style={styles.hostInfo}>
+                <Text style={styles.hostLabel}>Hosted by:</Text>
+                <Text style={styles.hostName}>
+                  {hostInfo?.name || (selectedEvent.host_id === user?.id ? user?.email?.split('@')[0] : "Unknown")}
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  // Function to handle location selection
+  const handleLocationPress = () => {
+    setShowLocationSelector(true);
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <Header
+        location={locationName}
+        eventsCount={eventsNearby}
+        onLocationPress={handleLocationPress}
+        profile={profileImage}
+        onRadiusChange={handleRadiusChange}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        onSearch={handleSearch}
+      />
+      
+      <View style={styles.mapContainer}>
+        {loading || searchLoading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+            <Text style={styles.loadingText}>
+              {searchLoading ? 'Searching events...' : 'Loading map...'}
+            </Text>
+          </View>
+        ) : (
+          <MapView
+            ref={mapRef}
+            style={styles.map}
+            initialRegion={region}
+            region={region}
+            onRegionChangeComplete={onRegionChangeComplete}
+            showsUserLocation
+            showsMyLocationButton
+          >
+            {/* Render markers for each cluster */}
+            {Object.values(clusters).map((cluster, index) => {
+              const eventCount = cluster.events.length;
+              
+              // Determine marker size based on count (larger for more events)
+              const sizeMultiplier = Math.min(1.5, 1 + (eventCount / 20));
+              const markerSize = {
+                width: 40 * sizeMultiplier,
+                height: 40 * sizeMultiplier,
+                borderRadius: 20 * sizeMultiplier,
+              };
+              
+              return (
+                <Marker
+                  key={`cluster-${index}`}
+                  coordinate={cluster.center}
+                  onPress={() => handleMarkerPress(cluster.events)}
+                >
+                  <View style={styles.markerContainer}>
+                    <View style={[styles.clusterMarker, markerSize]}>
+                      <Text style={styles.clusterText}>
+                        {eventCount}
                       </Text>
                     </View>
                   </View>
-                  
-                  <MaterialIcons name="chevron-right" size={24} color={COLORS.text} />
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+                </Marker>
+              );
+            })}
+          </MapView>
+        )}
+      </View>
+      
+      {/* Location selector modal */}
+      <Modal
+        visible={showLocationSelector}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={closeLocationSelector}
+      >
+        <View style={styles.locationSelectorContainer}>
+          <View style={styles.locationSelectorHeader}>
+            <Text style={styles.locationSelectorTitle}>
+              {eventsAtLocation.length} Events at This Location
+            </Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={closeLocationSelector}
+            >
+              <MaterialIcons name="close" size={24} color={COLORS.text} />
+            </TouchableOpacity>
           </View>
+          
+          <ScrollView>
+            {eventsAtLocation.map(event => (
+              <TouchableOpacity
+                key={event.id}
+                style={styles.locationEventItem}
+                onPress={() => {
+                  closeLocationSelector();
+                  handleEventPress(event);
+                }}
+              >
+                <View style={styles.locationEventInfo}>
+                  <Text style={styles.locationEventTitle}>{event.title}</Text>
+                  <Text style={styles.locationEventDate}>
+                    {formatDate(event.event_date)}
+                  </Text>
+                </View>
+                
+                <MaterialIcons
+                  name="chevron-right"
+                  size={24}
+                  color={COLORS.text}
+                />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
       </Modal>
       
       {/* Event Details Drawer */}
       <Modal
         visible={showDrawer}
-        animationType="slide"
         transparent={true}
+        animationType="slide"
         onRequestClose={closeDrawer}
       >
         <View style={styles.drawerContainer}>
-          <View style={styles.drawerHandle} />
-          <TouchableOpacity 
-            style={styles.closeButton}
+          <View style={styles.drawerHandle}>
+            <View style={styles.handleBar} />
+          </View>
+          
+          <TouchableOpacity
+            style={styles.closeDrawerButton}
             onPress={closeDrawer}
           >
             <MaterialIcons name="close" size={24} color={COLORS.text} />
           </TouchableOpacity>
           
-          {selectedEvent && (
-            <ScrollView style={styles.drawerContent}>
-              {selectedEvent.image_url ? (
-                <Image 
-                  source={{ uri: selectedEvent.image_url }} 
-                  style={styles.eventImage} 
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={styles.noImageContainer}>
-                  <MaterialIcons name="image" size={40} color={COLORS.placeholder} />
-                  <Text style={styles.noImageText}>No Image</Text>
-                </View>
-              )}
-              
-              <View style={styles.contentPadding}>
-                <Text style={styles.eventTitle}>{selectedEvent.title}</Text>
-                
-                <View style={styles.infoRow}>
-                  <MaterialIcons name="person" size={20} color={COLORS.primary} />
-                  <Text style={styles.infoText}>
-                    Hosted by {hostInfo ? hostInfo.name : 'Loading...'}
-                  </Text>
-                </View>
-                
-                <View style={styles.infoRow}>
-                  <MaterialIcons name="location-on" size={20} color={COLORS.primary} />
-                  <Text style={styles.infoText}>{selectedEvent.location}</Text>
-                </View>
-                
-                <View style={styles.infoRow}>
-                  <MaterialIcons name="event" size={20} color={COLORS.primary} />
-                  <Text style={styles.infoText}>{formatDate(selectedEvent.event_date)}</Text>
-                </View>
-                
-                {selectedEvent.description && (
-                  <View style={styles.descriptionContainer}>
-                    <Text style={styles.descriptionText}>{selectedEvent.description}</Text>
-                  </View>
-                )}
-                
-                <View style={styles.attendeesContainer}>
-                  <Text style={styles.sectionTitle}>
-                    Attendees ({attendees.length})
-                  </Text>
-                  <View style={styles.attendeesList}>
-                    {attendees.length > 0 ? (
-                      attendees.map((attendee, index) => (
-                        <View key={index} style={styles.attendeeItem}>
-                          <View style={styles.attendeeAvatar}>
-                            <Text style={styles.attendeeInitial}>
-                              {attendee.name ? attendee.name.charAt(0).toUpperCase() : '?'}
-                            </Text>
-                          </View>
-                          <Text style={styles.attendeeName} numberOfLines={1}>{attendee.name}</Text>
-                        </View>
-                      ))
-                    ) : (
-                      <Text style={styles.noAttendeesText}>No attendees yet</Text>
-                    )}
-                  </View>
-                </View>
-                
-                <View style={styles.buttonsContainer}>
-                  {user && selectedEvent.host_id === user.id ? (
-                    <TouchableOpacity
-                      style={[styles.button, styles.editButton]}
-                      onPress={goToEditEvent}
-                    >
-                      <Text style={styles.buttonText}>Edit Event</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={[
-                        styles.button,
-                        attending ? styles.cancelButton : styles.attendButton,
-                        loadingAttendance && styles.disabledButton
-                      ]}
-                      onPress={toggleAttendance}
-                      disabled={loadingAttendance}
-                    >
-                      {loadingAttendance ? (
-                        <ActivityIndicator size="small" color="white" />
-                      ) : (
-                        <Text style={styles.buttonText}>
-                          {attending ? 'Cancel Attendance' : 'Attend Event'}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  )}
-                  
-                  <TouchableOpacity
-                    style={[styles.button, styles.detailsButton]}
-                    onPress={goToEventDetails}
-                  >
-                    <Text style={styles.buttonText}>View Details</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </ScrollView>
-          )}
+          {renderEventDetails()}
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000",
-    paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0,
+    backgroundColor: '#FFFFFF',
+  },
+  mapContainer: {
+    flex: 1,
+    marginTop: 0,
   },
   map: {
-    height:
-      height + (Platform.OS === "android" ? StatusBar.currentHeight || 0 : 0),
-    width: "100%",
+    width: '100%',
+    height: '100%',
   },
   markerContainer: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  markerIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: 'rgba(139, 92, 246, 0.3)',
+  clusterMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#8E6FC5',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 4,
   },
-  markerInner: {
-    width: 15,
-    height: 15,
-    borderRadius: 7.5,
-    backgroundColor: COLORS.primary,
+  clusterText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: FONT_SIZES.md,
+    textAlign: 'center',
   },
-  drawerContainer: {
-    backgroundColor: COLORS.background,
-    height: height * 0.7,
+  locationSelectorContainer: {
+    backgroundColor: 'white',
+    marginTop: height * 0.3,
+    flex: 1,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    shadowColor: "#000",
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.27,
-    shadowRadius: 4.65,
-    elevation: 6,
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 10,
+  },
+  locationSelectorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  locationSelectorTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  closeButton: {
+    padding: SPACING.sm,
+  },
+  locationEventItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  locationEventInfo: {
+    flex: 1,
+  },
+  locationEventTitle: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    marginBottom: SPACING.xs,
+  },
+  locationEventDate: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text,
+  },
+  drawerContainer: {
+    backgroundColor: 'white',
+    height: height * 0.7,
+    marginTop: height * 0.3,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: SPACING.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 10,
   },
   drawerHandle: {
+    alignItems: 'center',
+    marginBottom: SPACING.md,
+  },
+  handleBar: {
     width: 40,
     height: 5,
-    backgroundColor: COLORS.border,
     borderRadius: 3,
-    alignSelf: 'center',
-    marginTop: 10,
+    backgroundColor: COLORS.border,
+  },
+  closeDrawerButton: {
+    position: 'absolute',
+    top: SPACING.md,
+    right: SPACING.md,
+    padding: SPACING.sm,
+    zIndex: 10,
   },
   drawerContent: {
     flex: 1,
+    marginTop: SPACING.sm,
   },
   eventImage: {
     width: '100%',
     height: 200,
+    borderRadius: 10,
+    marginBottom: SPACING.md,
   },
-  noImageContainer: {
+  imagePlaceholder: {
     width: '100%',
     height: 200,
     backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 10,
+    marginBottom: SPACING.md,
   },
-  noImageText: {
-    fontSize: FONT_SIZES.md,
-    color: COLORS.placeholder,
-    marginTop: SPACING.xs,
-  },
-  contentPadding: {
-    padding: SPACING.md,
+  eventDetails: {
+    flex: 1,
   },
   eventTitle: {
     fontSize: FONT_SIZES.xl,
@@ -672,75 +1011,31 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     marginBottom: SPACING.sm,
   },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  infoText: {
+  eventLocation: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.text,
-    marginLeft: SPACING.xs,
+    color: COLORS.textSecondary || '#666',
+    marginBottom: SPACING.xs,
   },
-  descriptionContainer: {
-    marginVertical: SPACING.md,
-    padding: SPACING.sm,
-    backgroundColor: '#F0F0F0',
-    borderRadius: 10,
+  eventDate: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary || '#666',
+    marginBottom: SPACING.lg,
   },
-  descriptionText: {
+  descriptionScroll: {
+    maxHeight: 100,
+    marginBottom: SPACING.lg,
+  },
+  eventDescription: {
     fontSize: FONT_SIZES.md,
     color: COLORS.text,
     lineHeight: 22,
   },
-  sectionTitle: {
-    fontSize: FONT_SIZES.lg,
-    fontWeight: 'bold',
-    color: COLORS.text,
-    marginBottom: SPACING.sm,
-  },
-  attendeesContainer: {
-    marginTop: SPACING.md,
-  },
-  attendeesList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  attendeeItem: {
-    alignItems: 'center',
-    marginRight: SPACING.md,
-    marginBottom: SPACING.md,
-    width: 60,
-  },
-  attendeeAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: COLORS.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.xs,
-  },
-  attendeeInitial: {
-    color: 'white',
-    fontSize: FONT_SIZES.lg,
-    fontWeight: 'bold',
-  },
-  attendeeName: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.text,
-    textAlign: 'center',
-  },
-  noAttendeesText: {
-    fontSize: FONT_SIZES.md,
-    color: COLORS.placeholder,
-  },
-  buttonsContainer: {
-    marginTop: SPACING.lg,
+  actionButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    marginBottom: SPACING.lg,
   },
-  button: {
+  actionButton: {
     flex: 1,
     height: 50,
     justifyContent: 'center',
@@ -748,111 +1043,61 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginHorizontal: SPACING.xs,
   },
-  attendButton: {
+  primaryButton: {
     backgroundColor: COLORS.primary,
   },
-  cancelButton: {
-    backgroundColor: '#F87171',
+  secondaryButton: {
+    backgroundColor: COLORS.secondary,
   },
   editButton: {
-    backgroundColor: '#60A5FA',
-  },
-  detailsButton: {
     backgroundColor: COLORS.primary,
   },
-  disabledButton: {
-    opacity: 0.7,
+  attendingButton: {
+    backgroundColor: COLORS.danger,
   },
-  buttonText: {
+  attendingIndicator: {
+    marginRight: SPACING.md,
+  },
+  actionButtonText: {
     color: 'white',
     fontSize: FONT_SIZES.md,
     fontWeight: 'bold',
   },
-  closeButton: {
-    position: 'absolute',
-    top: 10,
-    right: 15,
-    zIndex: 10,
-    padding: 5,
+  attendeesSection: {
+    paddingTop: SPACING.md,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
   },
-  uniformMarker: {
-    backgroundColor: 'rgba(139, 92, 246, 0.7)',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: 'white',
-  },
-  markerCount: {
-    color: 'white',
-    fontSize: FONT_SIZES.sm,
+  sectionTitle: {
+    fontSize: FONT_SIZES.md,
     fontWeight: 'bold',
+    marginBottom: SPACING.sm,
   },
-  locationSelectorContainer: {
-    flex: 1,
-    padding: SPACING.md,
-  },
-  locationSelectorTitle: {
-    fontSize: FONT_SIZES.lg,
-    fontWeight: 'bold',
-    color: COLORS.text,
+  hostInfo: {
     marginBottom: SPACING.md,
-  },
-  locationEventsList: {
-    flex: 1,
-  },
-  locationEventItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: SPACING.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
   },
-  locationEventImageContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    overflow: 'hidden',
-    marginRight: SPACING.md,
+  hostLabel: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary || '#666',
+    marginRight: SPACING.xs,
   },
-  locationEventImage: {
-    width: '100%',
-    height: '100%',
+  hostName: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    color: COLORS.text,
   },
-  locationEventNoImage: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#F0F0F0',
+  loadingContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  locationEventInfo: {
-    flex: 1,
-    marginRight: SPACING.sm,
-  },
-  locationEventTitle: {
-    fontSize: FONT_SIZES.md,
-    fontWeight: 'bold',
+  loadingText: {
+    marginTop: SPACING.md,
     color: COLORS.text,
-    marginBottom: SPACING.xs,
-  },
-  locationEventDate: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.text,
-    marginBottom: SPACING.xs,
-  },
-  eventTypeTag: {
-    backgroundColor: '#F0F0F0',
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.xs / 2,
-    borderRadius: 12,
-    alignSelf: 'flex-start',
-  },
-  eventTypeText: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.primary,
-    fontWeight: '500',
   },
 });
 
 export default MapScreen;
+
