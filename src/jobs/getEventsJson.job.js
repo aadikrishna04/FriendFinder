@@ -354,7 +354,7 @@ function extractEventsDirectlyFromHtml(html) {
       title: titleMatch ? titleMatch[1].trim() : "Untitled Event",
       date: date || new Date().toISOString().split('T')[0],
       time: time || "",
-      location: locationMatch ? locationMatch[1].trim() : "University of Maryland",
+      location: locationMatch ? locationMatch[1].trim() : "College Park, Maryland",
       description: "Event details extracted from TerpLink",
       organizerName: organizerMatch ? organizerMatch[1].trim() : "",
       category: "",

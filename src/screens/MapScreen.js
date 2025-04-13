@@ -51,14 +51,14 @@ const MapScreen = ({ navigation }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [region, setRegion] = useState({
-    latitude: 38.9869,
-    longitude: -76.9426,
+    latitude: 38.9897,
+    longitude: -76.9378,
     latitudeDelta: 0.0922,
     longitudeDelta: 0.0421,
   });
   const mapRef = useRef(null);
   const searchInputRef = useRef(null);
-  const [locationName, setLocationName] = useState("New York");
+  const [locationName, setLocationName] = useState("College Park, MD");
   const [eventsNearby, setEventsNearby] = useState(0);
   const [profileImage, setProfileImage] = useState(null);
   const [searchRadius, setSearchRadius] = useState(20);

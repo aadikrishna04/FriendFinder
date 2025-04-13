@@ -1,10 +1,14 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Image, StyleSheet } from 'react-native';
 
 const SplashScreen = () => {
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>FriendBook</Text>
+      <Image 
+        source={require('../../assets/splash.png')}
+        style={styles.logo}
+        resizeMode="contain"
+      />
     </View>
   );
 };
@@ -12,14 +16,14 @@ const SplashScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#6e6cc7', // Updated to exact color requested
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 20,
   },
-  title: {
-    fontSize: 40,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+  logo: {
+    width: '100%',
+    height: '60%',
   }
 });
 

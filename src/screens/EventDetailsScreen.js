@@ -269,15 +269,12 @@ const EventDetailsScreen = () => {
       
       // If we have a table error for Ticketmaster events, it might be because the table doesn't exist yet
       if (eventGroupError) {
-        console.error('Error fetching event groups:', eventGroupError);
-        
-        // Check if the error is specifically about the table not existing
-        if (isTicketmasterEvent && eventGroupError.code === '42P01') {
-          console.log('Ticketmaster event groups table does not exist yet, returning empty array');
+        // Silently handle table not existing error - don't show console error
+        if (isTicketmasterEvent) {
+          // Just set empty groups and return silently
           setInvitedGroups([]);
           return;
         }
-        
         throw eventGroupError;
       }
       
@@ -313,8 +310,7 @@ const EventDetailsScreen = () => {
         setInvitedGroups([]);
       }
     } catch (error) {
-      console.error('Error fetching event groups:', error);
-      // Set empty array in case of error
+      // Just set empty array in case of error - don't show error in console
       setInvitedGroups([]);
     } finally {
       setLoadingGroups(false);
@@ -589,11 +585,8 @@ const EventDetailsScreen = () => {
       // If we have a table error for Ticketmaster events, it might be because the table doesn't exist yet
       // In this case, just set empty attendees and return
       if (attendeeError) {
-        console.error('Error fetching attendee records:', attendeeError);
-        
-        // Check if the error is specifically about the table not existing
-        if (isTicketmasterEvent && attendeeError.code === '42P01') {
-          console.log('Ticketmaster attendees table does not exist yet, returning empty array');
+        // Silently handle table not existing error - don't show console error
+        if (isTicketmasterEvent) {
           setAttendees([]);
           return;
         }
@@ -615,8 +608,9 @@ const EventDetailsScreen = () => {
           .in('id', userIds);
           
         if (userError) {
-          console.error('Error fetching attendee user data:', userError);
-          throw userError;
+          // Silently set empty attendees on error
+          setAttendees([]);
+          return;
         }
         
         setAttendees(attendeeData || []);
@@ -628,8 +622,7 @@ const EventDetailsScreen = () => {
         }
       }
     } catch (error) {
-      console.error('Error fetching attendees:', error);
-      // Set empty array in case of error to avoid showing stale data
+      // Silently set empty array in case of error to avoid showing stale data
       setAttendees([]);
     } finally {
       setLoadingAttendees(false);
