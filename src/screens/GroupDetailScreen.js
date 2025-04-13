@@ -557,7 +557,7 @@ const GroupDetailScreen = ({ route, navigation }) => {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.background }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.background, marginHorizontal: 8 }}>
       <View style={styles.container}>
         {/* Header with group info */}
         <View style={styles.groupInfoContainer}>
@@ -586,6 +586,9 @@ const GroupDetailScreen = ({ route, navigation }) => {
             </TouchableOpacity>
           )}
         </View>
+        
+        {/* Spacing between group info and tabs */}
+        <View style={{ height: 12 }} />
         
         {/* Tabs for Members and Events */}
         <View style={styles.tabContainer}>
@@ -630,17 +633,21 @@ const GroupDetailScreen = ({ route, navigation }) => {
               keyExtractor={(item) => item.id.toString()}
               renderItem={renderMemberItem}
               contentContainerStyle={styles.listContent}
+              ListHeaderComponent={() => <View style={{ height: 12 }} />}
+              ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
               ListFooterComponent={() => (
-                <TouchableOpacity 
-                  style={styles.addMemberButton}
-                  onPress={() => {
-                    setSelectedContacts([]);
-                    setAddMemberModalVisible(true);
-                    loadAppContacts();
-                  }}
-                >
-                  <Text style={styles.addMemberButtonText}>Add More Members</Text>
-                </TouchableOpacity>
+                <View style={{ paddingTop: 30 }}>
+                  <TouchableOpacity 
+                    style={styles.addMemberButton}
+                    onPress={() => {
+                      setSelectedContacts([]);
+                      setAddMemberModalVisible(true);
+                      loadAppContacts();
+                    }}
+                  >
+                    <Text style={styles.addMemberButtonText}>Add More Members</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             />
           )
@@ -811,7 +818,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
-    padding: SPACING.medium,
+    paddingHorizontal: SPACING.large,
+    paddingVertical: SPACING.medium,
   },
   centered: {
     flex: 1,
@@ -826,8 +834,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.medium,
-    paddingBottom: 10,
+    marginBottom: SPACING.small,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
@@ -847,8 +855,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: COLORS.primary,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: 12,
+    marginLeft: 8,
   },
   privacyText: {
     color: COLORS.white,
@@ -871,9 +880,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: COLORS.cardBackground,
-    borderRadius: 8,
+    borderRadius: 12,
     padding: SPACING.medium,
-    marginBottom: SPACING.small,
+    marginHorizontal: 4,
+    marginBottom: 8,
   },
   memberInfo: {
     flexDirection: 'row',
@@ -887,7 +897,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: SPACING.small,
+    marginRight: SPACING.medium + 6,
   },
   memberInitials: {
     color: COLORS.white,
@@ -923,13 +933,15 @@ const styles = StyleSheet.create({
   },
   addMemberButton: {
     backgroundColor: COLORS.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
     marginTop: SPACING.medium,
+    marginHorizontal: SPACING.medium,
     alignSelf: 'center',
-    minWidth: 150,
+    minWidth: 180,
     alignItems: 'center',
+    marginBottom: SPACING.medium + 6,
   },
   addMemberButtonText: {
     color: COLORS.white,
@@ -945,8 +957,10 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    padding: SPACING.medium,
+    padding: SPACING.large,
+    paddingHorizontal: SPACING.large + 6,
     maxHeight: '80%',
+    marginHorizontal: 8,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1115,11 +1129,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
     backgroundColor: COLORS.white,
+    marginHorizontal: 10,
+    borderRadius: 8,
+    marginBottom: SPACING.small,
   },
   tab: {
     flex: 1,
-    paddingVertical: SPACING.sm,
+    paddingVertical: SPACING.medium,
     alignItems: 'center',
+    marginHorizontal: 4,
   },
   activeTab: {
     borderBottomWidth: 2,
