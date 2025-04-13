@@ -1,39 +1,40 @@
-import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  SafeAreaView, 
-  KeyboardAvoidingView, 
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  KeyboardAvoidingView,
   Platform,
-  Alert 
-} from 'react-native';
-import { Button, Input, FriendAvatars } from '../components';
-import { signIn } from '../services/authService';
-import { COLORS, SPACING, FONT_SIZES } from '../constants';
+  Image,
+  Alert,
+} from "react-native";
+import { Button, Input, FriendAvatars } from "../components";
+import { signIn } from "../services/authService";
+import { COLORS, SPACING, FONT_SIZES } from "../constants";
 
 const SignInScreen = ({ navigation }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const handleSignIn = async () => {
     // Validate inputs
     if (!email || !password) {
-      setError('Please fill in all fields');
+      setError("Please fill in all fields");
       return;
     }
-    
+
     setError(null);
     setLoading(true);
-    
+
     try {
       await signIn(email, password);
       // Auth state listener in App.tsx will handle navigation
     } catch (error) {
       setError(error.message);
-      Alert.alert('Sign In Failed', error.message);
+      Alert.alert("Sign In Failed", error.message);
     } finally {
       setLoading(false);
     }
@@ -41,18 +42,24 @@ const SignInScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.container}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Sign In</Text>
+          <Text style={styles.title}>Welcome back.</Text>
         </View>
-        
-        <View style={styles.avatarSection}>
-          <FriendAvatars variant="small" />
-        </View>
-        
+
+        <Image
+          source={require("../../assets/image.png")}
+          style={{
+            width: 200,
+            height: 200,
+            marginLeft: "auto",
+            marginRight: "auto",
+          }}
+        ></Image>
+
         <View style={styles.formContainer}>
           <Input
             placeholder="Email"
@@ -62,7 +69,7 @@ const SignInScreen = ({ navigation }) => {
             autoCapitalize="none"
             error={error && !email}
           />
-          
+
           <Input
             placeholder="Password"
             value={password}
@@ -70,7 +77,7 @@ const SignInScreen = ({ navigation }) => {
             secureTextEntry
             error={error && !password}
           />
-          
+
           <Button
             title="Sign In"
             onPress={handleSignIn}
@@ -78,10 +85,10 @@ const SignInScreen = ({ navigation }) => {
             disabled={loading}
             style={styles.button}
           />
-          
+
           <Button
             title="No Account? Sign Up!"
-            onPress={() => navigation.navigate('SignUp')}
+            onPress={() => navigation.navigate("SignUp")}
             variant="secondary"
             style={styles.secondaryButton}
           />
@@ -102,12 +109,12 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: FONT_SIZES.xxl,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    color: COLORS.text,
+    fontWeight: "bold",
+    textAlign: "center",
+    color: "#282829",
   },
   avatarSection: {
-    alignItems: 'center',
+    alignItems: "center",
     paddingVertical: SPACING.lg,
   },
   formContainer: {
@@ -122,4 +129,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default SignInScreen; 
+export default SignInScreen;

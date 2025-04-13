@@ -5,6 +5,7 @@ import {
   StyleSheet,
   SafeAreaView,
   KeyboardAvoidingView,
+  Image,
   Platform,
   Alert,
   TouchableOpacity,
@@ -82,9 +83,15 @@ const SignUpScreen = ({ navigation }) => {
           <Text style={styles.title}>Create Account</Text>
         </View>
 
-        <View style={styles.avatarSection}>
-          <FriendAvatars variant="small" />
-        </View>
+        <Image
+          source={require("../../assets/image.png")}
+          style={{
+            width: 200,
+            height: 200,
+            marginLeft: "auto",
+            marginRight: "auto",
+          }}
+        ></Image>
 
         <View style={styles.formContainer}>
           <Input
