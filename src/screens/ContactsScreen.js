@@ -3,25 +3,23 @@ import {
   View, 
   Text, 
   StyleSheet, 
-  SafeAreaView,
-  FlatList,
   TouchableOpacity,
+  Modal,
   TextInput,
   Alert,
+  FlatList,
   ActivityIndicator,
-  Modal
+  SafeAreaView
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabaseClient';
 import { COLORS, SPACING, FONT_SIZES } from '../constants';
-import * as Contacts from 'expo-contacts';
 
 const ContactsScreen = ({ navigation }) => {
+  const [showAddContactModal, setShowAddContactModal] = useState(false);
+  const [user, setUser] = useState(null);
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [user, setUser] = useState(null);
-  const [showAddContactModal, setShowAddContactModal] = useState(false);
   const [newContact, setNewContact] = useState({
     name: '',
     email: '',
@@ -29,43 +27,39 @@ const ContactsScreen = ({ navigation }) => {
   });
   const [errors, setErrors] = useState({});
 
+  // Get current user and contacts on component mount
   useEffect(() => {
-    fetchUserAndContacts();
-    const unsubscribe = navigation.addListener('focus', fetchUserAndContacts);
-    return unsubscribe;
-  }, [navigation]);
+    const getCurrentUser = async () => {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (!error && user) {
+        setUser(user);
+        fetchContacts(user.id);
+      }
+    };
+    getCurrentUser();
+  }, []);
 
-  const fetchUserAndContacts = async () => {
+  const fetchContacts = async (userId) => {
     try {
       setLoading(true);
       
-      // Get current user
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError) throw userError;
-      setUser(user);
-      
-      // Fetch contacts from database
-      const { data: contactsData, error: contactsError } = await supabase
+      // Fetch contacts with joined user data
+      const { data, error } = await supabase
         .from('contacts')
         .select(`
-          id,
-          name,
-          email,
+          id, 
+          name, 
+          email, 
           phone_number,
           contact_id,
-          users:contact_id (
-            name,
-            email,
-            phone_number,
-            avatar_url
-          )
+          contacts_users:contact_id(name, email, phone_number, id)
         `)
-        .eq('owner_id', user.id)
+        .eq('owner_id', userId)
         .order('name');
+        
+      if (error) throw error;
       
-      if (contactsError) throw contactsError;
-      
-      setContacts(contactsData || []);
+      setContacts(data || []);
     } catch (error) {
       console.error('Error fetching contacts:', error);
       Alert.alert('Error', 'Failed to load contacts');
@@ -82,8 +76,8 @@ const ContactsScreen = ({ navigation }) => {
     }
     
     if (!newContact.email && !newContact.phoneNumber) {
-      newErrors.email = 'Either email or phone is required';
-      newErrors.phoneNumber = 'Either email or phone is required';
+      newErrors.email = 'Either email or phone number is required';
+      newErrors.phoneNumber = 'Either email or phone number is required';
     }
     
     if (newContact.email && !/^\S+@\S+\.\S+$/.test(newContact.email)) {
@@ -102,7 +96,7 @@ const ContactsScreen = ({ navigation }) => {
   };
 
   const addContact = async () => {
-    if (!validateContactInputs()) return;
+    if (!validateContactInputs() || !user) return;
     
     try {
       // Format phone number
@@ -116,204 +110,164 @@ const ContactsScreen = ({ navigation }) => {
         }
       }
       
-      // First check if user exists with this email or phone
-      let userId = null;
+      // Check if user exists with this email or phone
+      let registeredUser = null;
       
       if (newContact.email) {
         const { data: userData, error: userError } = await supabase
           .from('users')
-          .select('id')
+          .select('id, email, phone_number, name')
           .eq('email', newContact.email.toLowerCase())
           .single();
           
         if (!userError && userData) {
-          userId = userData.id;
+          registeredUser = userData;
         }
       } 
       
-      if (!userId && formattedPhone) {
+      if (!registeredUser && formattedPhone) {
         const { data: phoneUserData, error: phoneUserError } = await supabase
           .from('users')
-          .select('id')
+          .select('id, email, phone_number, name')
           .eq('phone_number', formattedPhone)
           .single();
           
         if (!phoneUserError && phoneUserData) {
-          userId = phoneUserData.id;
+          registeredUser = phoneUserData;
         }
       }
       
-      // Add contact to database
-      const { data, error } = await supabase
+      // If no registered user is found, show an error
+      if (!registeredUser) {
+        Alert.alert('No Registered User Found', 'You can only add contacts who are registered for the app. Please check the email or phone number.');
+        return;
+      }
+      
+      // Check if already a contact
+      const { data: existingContact } = await supabase
+        .from('contacts')
+        .select('id')
+        .eq('owner_id', user.id)
+        .eq('contact_id', registeredUser.id)
+        .single();
+        
+      if (existingContact) {
+        Alert.alert('Contact Exists', 'This person is already in your contacts.');
+        return;
+      }
+      
+      // Add contact to current user's contacts list
+      const { error: insertError } = await supabase
         .from('contacts')
         .insert({
           owner_id: user.id,
-          contact_id: userId,
+          contact_id: registeredUser.id,
           name: newContact.name,
-          email: newContact.email ? newContact.email.toLowerCase() : null,
-          phone_number: formattedPhone
-        })
-        .select();
+          email: registeredUser.email,
+          phone_number: registeredUser.phone_number
+        });
       
-      if (error) throw error;
+      if (insertError) throw insertError;
       
-      // Show success message
+      // Add current user to the other user's contacts (bidirectional)
+      const { data: currentUserData } = await supabase
+        .from('users')
+        .select('name, email, phone_number')
+        .eq('id', user.id)
+        .single();
+      
+      // Check if current user is already in the other user's contacts
+      const { data: reverseExistingContact } = await supabase
+        .from('contacts')
+        .select('id')
+        .eq('owner_id', registeredUser.id)
+        .eq('contact_id', user.id)
+        .single();
+        
+      if (!reverseExistingContact) {
+        const { error: reverseInsertError } = await supabase
+          .from('contacts')
+          .insert({
+            owner_id: registeredUser.id,
+            contact_id: user.id,
+            name: currentUserData.name || user.email.split('@')[0],
+            email: currentUserData.email || user.email,
+            phone_number: currentUserData.phone_number || null
+          });
+          
+        if (reverseInsertError) {
+          console.error('Error adding reverse contact:', reverseInsertError);
+          // Don't throw so we can continue - the primary contact was still added
+        }
+      }
+      
       Alert.alert('Success', 'Contact added successfully');
-      
-      // Reset form and refresh contacts
       setNewContact({ name: '', email: '', phoneNumber: '' });
       setShowAddContactModal(false);
-      fetchUserAndContacts();
+      
+      // Refresh contacts list
+      fetchContacts(user.id);
+      
     } catch (error) {
-      if (error.code === '23505') {
-        Alert.alert('Error', 'This contact already exists in your contacts');
-      } else {
-        console.error('Error adding contact:', error);
-        Alert.alert('Error', 'Failed to add contact');
-      }
+      console.error('Error adding contact:', error);
+      Alert.alert('Error', 'Failed to add contact');
     }
   };
-
-  const importFromDevice = async () => {
-    try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Cannot access contacts');
-        return;
-      }
-      
-      const { data } = await Contacts.getContactsAsync({
-        fields: [
-          Contacts.Fields.PhoneNumbers,
-          Contacts.Fields.Emails,
-          Contacts.Fields.Name,
-        ],
-        sort: Contacts.SortTypes.FirstName
-      });
-      
-      if (data.length === 0) {
-        Alert.alert('No Contacts', 'No contacts found on your device');
-        return;
-      }
-      
-      navigation.navigate('ImportContacts', { deviceContacts: data });
-    } catch (error) {
-      console.error('Error importing contacts:', error);
-      Alert.alert('Error', 'Failed to import contacts');
-    }
-  };
-
-  const deleteContact = async (contactId) => {
-    try {
-      const { error } = await supabase
-        .from('contacts')
-        .delete()
-        .eq('id', contactId);
-      
-      if (error) throw error;
-      
-      // Update local state
-      setContacts(contacts.filter(contact => contact.id !== contactId));
-      
-      Alert.alert('Success', 'Contact deleted successfully');
-    } catch (error) {
-      console.error('Error deleting contact:', error);
-      Alert.alert('Error', 'Failed to delete contact');
-    }
-  };
-
-  const confirmDeleteContact = (contact) => {
-    Alert.alert(
-      'Delete Contact',
-      `Are you sure you want to delete ${contact.name} from your contacts?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => deleteContact(contact.id) }
-      ]
-    );
-  };
-
-  // Filter contacts based on search query
-  const filteredContacts = contacts.filter(contact => 
-    contact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (contact.email && contact.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (contact.phone_number && contact.phone_number.includes(searchQuery))
-  );
 
   const renderContactItem = ({ item }) => {
-    const isRegisteredUser = !!item.contact_id;
-    const userData = item.users || {};
-    
+    const contactUser = item.contacts_users;
     return (
-      <TouchableOpacity
+      <TouchableOpacity 
         style={styles.contactItem}
-        onPress={() => {
-          // Navigate to user profile if registered user
-          if (isRegisteredUser) {
-            navigation.navigate('UserProfile', { userId: item.contact_id });
-          }
-        }}
+        onPress={() => navigation.navigate('UserProfile', { userId: item.contact_id })}
       >
         <View style={styles.contactAvatar}>
           <Text style={styles.contactInitial}>
-            {item.name.charAt(0).toUpperCase()}
+            {item.name ? item.name.charAt(0).toUpperCase() : '?'}
           </Text>
         </View>
-        
         <View style={styles.contactInfo}>
           <Text style={styles.contactName}>{item.name}</Text>
-          {isRegisteredUser && (
-            <Text style={styles.registeredLabel}>Registered User</Text>
-          )}
-          {item.email && (
-            <Text style={styles.contactDetail}>{item.email}</Text>
-          )}
+          <Text style={styles.contactDetails}>{item.email}</Text>
           {item.phone_number && (
-            <Text style={styles.contactDetail}>{item.phone_number}</Text>
+            <Text style={styles.contactDetails}>{item.phone_number}</Text>
           )}
         </View>
-        
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={() => confirmDeleteContact(item)}
-        >
-          <MaterialIcons name="delete" size={24} color={COLORS.danger} />
-        </TouchableOpacity>
+        <MaterialIcons name="chevron-right" size={24} color={COLORS.textSecondary} />
       </TouchableOpacity>
     );
   };
 
+  const EmptyContactsList = () => (
+    <View style={styles.emptyContainer}>
+      <MaterialIcons name="people" size={64} color={COLORS.textLight} />
+      <Text style={styles.emptyTitle}>No Contacts Yet</Text>
+      <Text style={styles.emptySubtitle}>
+        Add your first contact by tapping the + button
+      </Text>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Contacts</Text>
-        <View style={styles.headerButtons}>
-          <TouchableOpacity
-            style={styles.importButton}
-            onPress={importFromDevice}
-          >
-            <MaterialIcons name="cloud-download" size={24} color={COLORS.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => setShowAddContactModal(true)}
-          >
-            <MaterialIcons name="person-add" size={24} color={COLORS.primary} />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>My Contacts</Text>
+        <TouchableOpacity 
+          style={styles.addIconButton}
+          onPress={() => setShowAddContactModal(true)}
+        >
+          <MaterialIcons name="add" size={24} color={COLORS.primary} />
+        </TouchableOpacity>
       </View>
-      
-      <View style={styles.searchContainer}>
-        <MaterialIcons name="search" size={24} color={COLORS.textSecondary} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search contacts..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          clearButtonMode="while-editing"
-        />
-      </View>
-      
+
+      {/* Contacts List */}
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={COLORS.primary} />
@@ -321,22 +275,22 @@ const ContactsScreen = ({ navigation }) => {
         </View>
       ) : (
         <FlatList
-          data={filteredContacts}
+          data={contacts}
           renderItem={renderContactItem}
-          keyExtractor={item => item.id}
+          keyExtractor={item => item.id.toString()}
+          ListEmptyComponent={EmptyContactsList}
           contentContainerStyle={styles.contactsList}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <MaterialIcons name="person" size={64} color={COLORS.textLight} />
-              <Text style={styles.emptyTitle}>No Contacts Found</Text>
-              <Text style={styles.emptySubtitle}>
-                {searchQuery ? 'Try a different search term' : 'Add contacts to get started'}
-              </Text>
-            </View>
-          }
         />
       )}
-      
+
+      {/* Floating Add Button */}
+      <TouchableOpacity
+        style={styles.floatingAddButton}
+        onPress={() => setShowAddContactModal(true)}
+      >
+        <MaterialIcons name="add" size={24} color="white" />
+      </TouchableOpacity>
+
       {/* Add Contact Modal */}
       <Modal
         visible={showAddContactModal}
@@ -357,6 +311,10 @@ const ContactsScreen = ({ navigation }) => {
             </View>
             
             <View style={styles.formContainer}>
+              <Text style={styles.modalNote}>
+                Note: You can only add contacts who are registered for the app using their email or phone number.
+              </Text>
+              
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Name*</Text>
                 <TextInput
@@ -374,7 +332,7 @@ const ContactsScreen = ({ navigation }) => {
                   style={[styles.input, errors.email && styles.inputError]}
                   value={newContact.email}
                   onChangeText={(text) => setNewContact({...newContact, email: text})}
-                  placeholder="Email address"
+                  placeholder="Email address of registered user"
                   keyboardType="email-address"
                   autoCapitalize="none"
                 />
@@ -387,7 +345,7 @@ const ContactsScreen = ({ navigation }) => {
                   style={[styles.input, errors.phoneNumber && styles.inputError]}
                   value={newContact.phoneNumber}
                   onChangeText={(text) => setNewContact({...newContact, phoneNumber: text})}
-                  placeholder="Phone number"
+                  placeholder="Phone number of registered user"
                   keyboardType="phone-pad"
                 />
                 {errors.phoneNumber && <Text style={styles.errorText}>{errors.phoneNumber}</Text>}
@@ -405,7 +363,7 @@ const ContactsScreen = ({ navigation }) => {
                   style={[styles.button, styles.addContactButton]}
                   onPress={addContact}
                 >
-                  <Text style={styles.buttonText}>Add Contact</Text>
+                  <Text style={styles.modalButtonText}>Add Contact</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -419,63 +377,49 @@ const ContactsScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: 'white',
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: SPACING.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.white,
+  },
+  backButton: {
+    padding: SPACING.xs,
   },
   headerTitle: {
+    flex: 1,
     fontSize: FONT_SIZES.lg,
     fontWeight: 'bold',
+    textAlign: 'center',
     color: COLORS.text,
   },
-  headerButtons: {
-    flexDirection: 'row',
-  },
-  importButton: {
-    marginRight: SPACING.md,
+  addIconButton: {
     padding: SPACING.xs,
   },
-  addButton: {
-    padding: SPACING.xs,
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: SPACING.sm,
-    backgroundColor: COLORS.white,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    paddingHorizontal: SPACING.md,
-  },
-  searchInput: {
+  loadingContainer: {
     flex: 1,
-    marginLeft: SPACING.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: SPACING.md,
     fontSize: FONT_SIZES.md,
-    color: COLORS.text,
+    color: COLORS.secondaryText,
   },
   contactsList: {
+    paddingVertical: SPACING.md,
     flexGrow: 1,
-    padding: SPACING.sm,
   },
   contactItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.white,
-    borderRadius: 8,
-    marginBottom: SPACING.sm,
     padding: SPACING.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1,
-    elevation: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
   },
   contactAvatar: {
     width: 50,
@@ -496,52 +440,47 @@ const styles = StyleSheet.create({
   },
   contactName: {
     fontSize: FONT_SIZES.md,
-    fontWeight: 'bold',
+    fontWeight: '600',
     color: COLORS.text,
-    marginBottom: 2,
-  },
-  registeredLabel: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.primary,
-    fontWeight: 'bold',
     marginBottom: 4,
   },
-  contactDetail: {
+  contactDetails: {
     fontSize: FONT_SIZES.sm,
-    color: COLORS.textSecondary,
-    marginBottom: 2,
-  },
-  deleteButton: {
-    padding: SPACING.xs,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: SPACING.md,
-    fontSize: FONT_SIZES.md,
-    color: COLORS.textSecondary,
+    color: COLORS.secondaryText,
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: SPACING.xl,
-    paddingTop: SPACING.xxl * 2,
   },
   emptyTitle: {
     fontSize: FONT_SIZES.lg,
     fontWeight: 'bold',
-    color: COLORS.textSecondary,
+    color: COLORS.text,
     marginTop: SPACING.md,
   },
   emptySubtitle: {
     fontSize: FONT_SIZES.md,
-    color: COLORS.textLight,
+    color: COLORS.secondaryText,
     textAlign: 'center',
     marginTop: SPACING.sm,
+  },
+  floatingAddButton: {
+    position: 'absolute',
+    bottom: 30,
+    right: 30,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
   },
   // Modal styles
   modalOverlay: {
@@ -550,7 +489,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContainer: {
-    backgroundColor: COLORS.white,
+    backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: SPACING.lg,
@@ -572,6 +511,16 @@ const styles = StyleSheet.create({
   },
   formContainer: {
     marginTop: SPACING.md,
+  },
+  modalNote: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.secondaryText,
+    marginBottom: SPACING.md,
+    backgroundColor: '#F7F9FA',
+    padding: SPACING.sm,
+    borderRadius: 6,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary,
   },
   inputGroup: {
     marginBottom: SPACING.md,
@@ -619,7 +568,7 @@ const styles = StyleSheet.create({
   addContactButton: {
     backgroundColor: COLORS.primary,
   },
-  buttonText: {
+  modalButtonText: {
     fontSize: FONT_SIZES.md,
     fontWeight: '600',
     color: 'white',
@@ -628,7 +577,7 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     fontWeight: '600',
     color: COLORS.text,
-  },
+  }
 });
 
 export default ContactsScreen; 

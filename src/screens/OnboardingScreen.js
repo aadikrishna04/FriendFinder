@@ -7,14 +7,28 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { Button, Input } from "../components";
 import { COLORS, SPACING, FONT_SIZES } from "../constants";
+import { supabase } from "../services/supabaseClient";
 
-const OnboardingScreen = ({ navigation }) => {
+const OnboardingScreen = ({ route, navigation }) => {
+  // Get user data from route params
+  const { userId, email, fullName, phoneNumber, password } = route.params || {};
+  
+  console.log("OnboardingScreen initialized with params:", 
+    route.params ? JSON.stringify({
+      userId,
+      email,
+      fullName,
+      phoneNumber,
+      hasPassword: !!password
+    }, null, 2) : "No params");
+  
   const [interestsInput, setInterestsInput] = useState("");
   const [major, setMajor] = useState("");
-  const [resume, setResume] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
 
   const parsedInterests = interestsInput
@@ -32,14 +46,75 @@ const OnboardingScreen = ({ navigation }) => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validateForm()) return;
-
-    // Simulate setting resume as major
-    setResume({ name: major });
-
-    Alert.alert("Success", `Onboarding complete!\nResume: ${major}`);
-    navigation.navigate("MapScreen");
+    
+    setLoading(true);
+    
+    try {
+      // Validate user ID
+      if (!userId) {
+        console.error('User ID is undefined or invalid. Route params:', 
+          route.params ? JSON.stringify(route.params, null, 2) : "No params");
+        throw new Error('User ID is undefined or invalid');
+      }
+      
+      console.log(`Attempting to update profile for user ID: ${userId}`);
+      
+      // Update user profile with interests and major
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          tags: JSON.stringify(parsedInterests),
+          resume: major  // Using resume field to store major for now
+        })
+        .eq('id', userId);
+      
+      if (error) {
+        console.error('Supabase update error:', error);
+        throw error;
+      }
+      
+      // Sign in the user with the stored credentials
+      if (!email || !password) {
+        console.error('Missing email or password for sign-in:', { 
+          hasEmail: !!email, 
+          hasPassword: !!password 
+        });
+        throw new Error('Sign-in credentials are missing');
+      }
+      
+      console.log(`Attempting to sign in with email: ${email}`);
+      
+      const { data: sessionData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password
+      });
+      
+      if (signInError) {
+        console.error('Sign-in error:', signInError);
+        throw signInError;
+      }
+      
+      console.log('Sign-in successful. User ID:', sessionData?.user?.id);
+      console.log('Resetting onboarding state');
+      
+      // Reset the onboarding state in the App component
+      if (global.startOnboarding) {
+        global.startOnboarding(null); // Reset onboarding data
+      } else {
+        console.warn('global.startOnboarding is not available');
+      }
+      
+      // No need to use navigation.reset since we're using global state
+      // The App component will automatically show the main app
+      // when isOnboarding is false and the user is authenticated
+    } catch (error) {
+      console.error('Error updating user profile:', error);
+      Alert.alert('Error', 'Failed to complete onboarding. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -50,6 +125,7 @@ const OnboardingScreen = ({ navigation }) => {
       >
         <View style={styles.header}>
           <Text style={styles.title}>Tell us about yourself</Text>
+          <Text style={styles.subtitle}>Hi {fullName}, just a few more details to get started!</Text>
         </View>
 
         <View style={styles.formContainer}>
@@ -81,9 +157,11 @@ const OnboardingScreen = ({ navigation }) => {
           />
 
           <Button
-            title="Complete Onboarding"
+            title="Complete Profile"
             onPress={handleSubmit}
             style={styles.button}
+            loading={loading}
+            disabled={loading}
           />
         </View>
       </KeyboardAvoidingView>
@@ -105,6 +183,13 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     textAlign: "center",
     color: COLORS.text,
+  },
+  subtitle: {
+    fontSize: FONT_SIZES.md,
+    textAlign: "center",
+    color: COLORS.secondaryText,
+    marginTop: SPACING.sm,
+    marginBottom: SPACING.lg,
   },
   formContainer: {
     paddingHorizontal: SPACING.lg,

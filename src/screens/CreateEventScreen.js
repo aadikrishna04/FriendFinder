@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import * as FileSystem from "expo-file-system";
 import { Buffer } from "buffer";
+import { Keyboard } from 'react-native';
 
 import {
   View,
@@ -27,6 +28,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import MapView, { Marker } from "react-native-maps";
 import * as Contacts from "expo-contacts";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { Ionicons } from "@expo/vector-icons";
 
 const CreateEventScreen = () => {
   const navigation = useNavigation();
@@ -65,6 +67,12 @@ const CreateEventScreen = () => {
 
   // Add a state for input focus
   const [addressInputFocused, setAddressInputFocused] = useState(false);
+
+  // Add new state for group features
+  const [userGroups, setUserGroups] = useState([]);
+  const [selectedGroups, setSelectedGroups] = useState([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [showGroupsModal, setShowGroupsModal] = useState(false);
 
   useEffect(() => {
     const getUser = async () => {
@@ -410,6 +418,77 @@ const CreateEventScreen = () => {
     }
   };
 
+  // Add a new useEffect to fetch groups when invite-only is selected
+  useEffect(() => {
+    if (inviteOnly) {
+      fetchUserGroups();
+    }
+  }, [inviteOnly]);
+  
+  // Add fetchUserGroups function
+  const fetchUserGroups = async () => {
+    if (!user) return;
+    
+    try {
+      setLoadingGroups(true);
+      
+      // Fetch groups where user is a member
+      const { data: membershipData, error: membershipError } = await supabase
+        .from('group_members')
+        .select('group_id')
+        .eq('user_id', user.id);
+        
+      if (membershipError) throw membershipError;
+      
+      // Extract group IDs
+      const groupIds = membershipData.map(m => m.group_id);
+      
+      if (groupIds.length > 0) {
+        // Fetch group details
+        const { data: groupsData, error: groupsError } = await supabase
+          .from('groups')
+          .select('id, name, host_id')
+          .in('id', groupIds);
+          
+        if (groupsError) throw groupsError;
+        
+        // Get member counts for each group
+        const groupsWithCounts = await Promise.all(groupsData.map(async (group) => {
+          const { count, error: countError } = await supabase
+            .from('group_members')
+            .select('*', { count: 'exact', head: true })
+            .eq('group_id', group.id);
+            
+          if (countError) throw countError;
+          
+          return {
+            ...group,
+            isHost: group.host_id === user.id,
+            memberCount: count || 0
+          };
+        }));
+        
+        setUserGroups(groupsWithCounts);
+      } else {
+        setUserGroups([]);
+      }
+    } catch (error) {
+      console.error('Error fetching user groups:', error);
+      Alert.alert('Error', 'Failed to load your groups');
+    } finally {
+      setLoadingGroups(false);
+    }
+  };
+  
+  // Add function to toggle group selection
+  const toggleGroupSelection = (group) => {
+    if (selectedGroups.some(g => g.id === group.id)) {
+      setSelectedGroups(selectedGroups.filter(g => g.id !== group.id));
+    } else {
+      setSelectedGroups([...selectedGroups, group]);
+    }
+  };
+
   const handleCreateEvent = async () => {
     if (!title || !address) {
       Alert.alert(
@@ -491,116 +570,152 @@ const CreateEventScreen = () => {
 
       if (error) throw error;
 
-      // If invite-only, handle invited contacts
-      if (!isOpen && selectedContacts.length > 0) {
+      // If invite-only, handle invited contacts and groups
+      if (!isOpen) {
         const eventId = data[0].id; // Get the newly created event ID
+        let registeredCount = 0;
+        let unregisteredCount = 0;
         
-        // Process each selected contact and create invitations
-        const invitePromises = selectedContacts.map(async (contact) => {
-          try {
-            // Log contact info
-            console.log(`Processing contact: ${contact.name}`);
-            
-            // If this contact is a registered user (matched during fetchRegisteredUsers)
-            if (contact.isRegistered && contact.appUserId) {
-              console.log(`Using app data for registered user: ${contact.appUserName} (${contact.appUserEmail})`);
+        // Process selected contacts for individual invitations
+        if (selectedContacts.length > 0) {
+          // Process each selected contact and create invitations
+          const invitePromises = selectedContacts.map(async (contact) => {
+            try {
+              // Log contact info
+              console.log(`Processing contact: ${contact.name}`);
               
-              // Use the app user ID directly - DO NOT include email/phone due to DB constraint
+              // If this contact is a registered user (matched during fetchRegisteredUsers)
+              if (contact.isRegistered && contact.appUserId) {
+                console.log(`Using app data for registered user: ${contact.appUserName} (${contact.appUserEmail})`);
+                
+                // Use the app user ID directly - DO NOT include email/phone due to DB constraint
+                const { error: inviteError } = await supabase
+                  .from('event_invitations')
+                  .insert({
+                    event_id: eventId,
+                    inviter_id: user.id,
+                    invitee_id: contact.appUserId,
+                    status: 'pending'
+                  });
+                
+                if (inviteError) {
+                  console.error('Error creating invitation with app user ID:', inviteError);
+                  return null;
+                }
+                
+                return { 
+                  type: 'registered', 
+                  user: { 
+                    id: contact.appUserId,
+                    name: contact.appUserName,
+                    email: contact.appUserEmail
+                  }
+                };
+              }
+              
+              // For non-registered users, get contact info from device
+              // Get contact email if available
+              let email = null;
+              if (contact.emails && contact.emails.length > 0) {
+                email = contact.emails[0].email;
+                console.log(`Using device email for non-registered user ${contact.name}: ${email}`);
+              } else {
+                console.log(`No email found for contact: ${contact.name}`);
+              }
+              
+              // If no email available, try to use phone as fallback
+              let phoneNumber = null;
+              if (!email && contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+                // Extract just the digits from the phone number
+                phoneNumber = contact.phoneNumbers[0].number.replace(/\D/g, '');
+                
+                // Format consistently with country code (assuming US numbers)
+                if (phoneNumber.length === 10) {
+                  phoneNumber = `+1${phoneNumber}`;
+                } else if (phoneNumber.length > 10 && !phoneNumber.startsWith('+')) {
+                  phoneNumber = `+${phoneNumber}`;
+                }
+                console.log(`Using device phone for non-registered user ${contact.name}: ${phoneNumber}`);
+              }
+              
+              if (!email && !phoneNumber) {
+                console.log('No contact info for:', contact.name);
+                return null;
+              }
+              
+              // Store invitation with contact info for non-registered user
+              const contactValue = email || phoneNumber;
+              const contactType = email ? 'email' : 'phone';
+              
               const { error: inviteError } = await supabase
                 .from('event_invitations')
                 .insert({
                   event_id: eventId,
                   inviter_id: user.id,
-                  invitee_id: contact.appUserId,
+                  invitee_phone: contactType === 'phone' ? contactValue : null,
+                  invitee_email: contactType === 'email' ? contactValue : null,
                   status: 'pending'
                 });
               
               if (inviteError) {
-                console.error('Error creating invitation with app user ID:', inviteError);
+                console.error('Error creating contact invitation:', inviteError);
                 return null;
               }
               
               return { 
-                type: 'registered', 
-                user: { 
-                  id: contact.appUserId,
-                  name: contact.appUserName,
-                  email: contact.appUserEmail
-                }
+                type: 'unregistered', 
+                contactType,
+                contactValue,
+                name: contact.name 
               };
-            }
-            
-            // For non-registered users, get contact info from device
-            // Get contact email if available
-            let email = null;
-            if (contact.emails && contact.emails.length > 0) {
-              email = contact.emails[0].email;
-              console.log(`Using device email for non-registered user ${contact.name}: ${email}`);
-            } else {
-              console.log(`No email found for contact: ${contact.name}`);
-            }
-            
-            // If no email available, try to use phone as fallback
-            let phoneNumber = null;
-            if (!email && contact.phoneNumbers && contact.phoneNumbers.length > 0) {
-              // Extract just the digits from the phone number
-              phoneNumber = contact.phoneNumbers[0].number.replace(/\D/g, '');
-              
-              // Format consistently with country code (assuming US numbers)
-              if (phoneNumber.length === 10) {
-                phoneNumber = `+1${phoneNumber}`;
-              } else if (phoneNumber.length > 10 && !phoneNumber.startsWith('+')) {
-                phoneNumber = `+${phoneNumber}`;
-              }
-              console.log(`Using device phone for non-registered user ${contact.name}: ${phoneNumber}`);
-            }
-            
-            if (!email && !phoneNumber) {
-              console.log('No contact info for:', contact.name);
+            } catch (error) {
+              console.error('Error processing invitation:', error);
               return null;
             }
+          });
+          
+          const results = await Promise.all(invitePromises);
+          const validResults = results.filter(r => r !== null);
+          
+          registeredCount = validResults.filter(r => r.type === 'registered').length;
+          unregisteredCount = validResults.filter(r => r.type === 'unregistered').length;
+        }
+        
+        // Process selected groups - add entries to event_groups table
+        let totalGroupMembers = 0;
+        if (selectedGroups.length > 0) {
+          const groupEntries = selectedGroups.map(group => ({
+            event_id: eventId,
+            group_id: group.id,
+            invited_by: user.id
+          }));
+          
+          const { error: groupInviteError } = await supabase
+            .from('event_groups')
+            .insert(groupEntries);
             
-            // Store invitation with contact info for non-registered user
-            const contactValue = email || phoneNumber;
-            const contactType = email ? 'email' : 'phone';
-            
-            const { error: inviteError } = await supabase
-              .from('event_invitations')
-              .insert({
-                event_id: eventId,
-                inviter_id: user.id,
-                invitee_phone: contactType === 'phone' ? contactValue : null,
-                invitee_email: contactType === 'email' ? contactValue : null,
-                status: 'pending'
-              });
-            
-            if (inviteError) {
-              console.error('Error creating contact invitation:', inviteError);
-              return null;
-            }
-            
-            return { 
-              type: 'unregistered', 
-              contactType,
-              contactValue,
-              name: contact.name 
-            };
-          } catch (error) {
-            console.error('Error processing invitation:', error);
-            return null;
+          if (groupInviteError) {
+            console.error('Error inviting groups:', groupInviteError);
+          } else {
+            console.log(`${selectedGroups.length} groups invited to event`);
+            totalGroupMembers = selectedGroups.reduce((sum, group) => sum + group.memberCount, 0);
           }
-        });
+        }
         
-        const results = await Promise.all(invitePromises);
-        const validResults = results.filter(r => r !== null);
+        // Show alert with invitation summary
+        let alertMessage = "";
+        if (registeredCount > 0 || unregisteredCount > 0) {
+          alertMessage += `Invitations sent to ${registeredCount} registered users and ${unregisteredCount} contacts who aren't registered yet.`;
+        }
         
-        const registeredCount = validResults.filter(r => r.type === 'registered').length;
-        const unregisteredCount = validResults.filter(r => r.type === 'unregistered').length;
+        if (selectedGroups.length > 0) {
+          if (alertMessage) alertMessage += "\n\n";
+          alertMessage += `${totalGroupMembers} members across ${selectedGroups.length} groups have been invited.`;
+        }
         
-        Alert.alert(
-          "Invitations Sent",
-          `Invitations sent to ${registeredCount} registered users and ${unregisteredCount} contacts who aren't registered yet.`
-        );
+        if (alertMessage) {
+          Alert.alert("Invitations Sent", alertMessage);
+        }
       }
 
       Alert.alert("Success", "Your event has been created!");
@@ -838,13 +953,59 @@ const CreateEventScreen = () => {
     </View>
   );
 
+  // Add a useEffect to catch keyboard show/hide events for better handling
+  useEffect(() => {
+    if (Platform.OS === 'ios') {
+      const keyboardWillShowListener = Keyboard.addListener('keyboardWillShow', () => {
+        // Ensure we're scrolled properly when keyboard appears
+      });
+      
+      const keyboardWillHideListener = Keyboard.addListener('keyboardWillHide', () => {
+        // Handling when keyboard hides
+      });
+      
+      return () => {
+        keyboardWillShowListener.remove();
+        keyboardWillHideListener.remove();
+      };
+    }
+  }, []);
+
+  // Add function to render group items
+  const renderGroupItem = ({ item }) => {
+    const isSelected = selectedGroups.some(g => g.id === item.id);
+    
+    return (
+      <TouchableOpacity
+        style={[styles.groupItem, isSelected && styles.selectedGroup]}
+        onPress={() => toggleGroupSelection(item)}
+      >
+        <View style={styles.groupInfo}>
+          <Text style={styles.groupName}>{item.name}</Text>
+          <Text style={styles.groupMemberCount}>
+            {item.memberCount} {item.memberCount === 1 ? 'member' : 'members'}
+          </Text>
+        </View>
+        
+        {isSelected && (
+          <MaterialIcons name="check" size={20} color={COLORS.primary} />
+        )}
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.container}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={true}
+          bounces={true}
+        >
           <View style={styles.header}>
             <TouchableOpacity
               style={styles.backButton}
@@ -1044,16 +1205,29 @@ const CreateEventScreen = () => {
                       />
                     </View>
                   ) : (
-                    <TouchableOpacity
-                      style={styles.inviteButton}
-                      onPress={loadContacts}
-                    >
-                      <Text style={styles.inviteButtonText}>
-                        {selectedContacts.length > 0
-                          ? `${selectedContacts.length} contacts selected`
-                          : "Select contacts to invite"}
-                      </Text>
-                    </TouchableOpacity>
+                    <>
+                      <TouchableOpacity
+                        style={styles.inviteButton}
+                        onPress={loadContacts}
+                      >
+                        <Text style={styles.inviteButtonText}>
+                          {selectedContacts.length > 0
+                            ? `${selectedContacts.length} contacts selected`
+                            : "Select contacts to invite"}
+                        </Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={[styles.inviteButton, { marginTop: SPACING.sm }]}
+                        onPress={() => setShowGroupsModal(true)}
+                      >
+                        <Text style={styles.inviteButtonText}>
+                          {selectedGroups.length > 0
+                            ? `${selectedGroups.length} groups selected`
+                            : "Select groups to invite"}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
                   )}
                 </View>
               </View>
@@ -1072,13 +1246,60 @@ const CreateEventScreen = () => {
                 {uploading ? (
                   <ActivityIndicator color="white" size="small" />
                 ) : (
-                  <Text style={styles.createButtonText}>CREATE EVENT</Text>
+                  <Text style={styles.createButtonText}>Save Event</Text>
                 )}
               </TouchableOpacity>
             </>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+      
+      {/* Add Groups Modal */}
+      <Modal
+        visible={showGroupsModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowGroupsModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Groups</Text>
+              <TouchableOpacity onPress={() => setShowGroupsModal(false)}>
+                <Ionicons name="close" size={24} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+            
+            {loadingGroups ? (
+              <ActivityIndicator size="large" color={COLORS.primary} style={styles.loader} />
+            ) : userGroups.length === 0 ? (
+              <Text style={styles.emptyText}>You don't have any groups yet</Text>
+            ) : (
+              <FlatList
+                data={userGroups}
+                renderItem={renderGroupItem}
+                keyExtractor={item => item.id}
+                contentContainerStyle={styles.groupsList}
+              />
+            )}
+            
+            <TouchableOpacity
+              style={[
+                styles.doneButton,
+                selectedGroups.length === 0 && styles.disabledButton
+              ]}
+              onPress={() => setShowGroupsModal(false)}
+              disabled={selectedGroups.length === 0}
+            >
+              <Text style={styles.doneButtonText}>
+                {selectedGroups.length > 0
+                  ? `Add ${selectedGroups.length} Groups`
+                  : "Done"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -1090,6 +1311,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    paddingBottom: 100,
   },
   header: {
     flexDirection: "row",
@@ -1130,6 +1352,7 @@ const styles = StyleSheet.create({
   },
   formContainer: {
     padding: SPACING.md,
+    marginBottom: SPACING.md,
   },
   inputContainer: {
     marginBottom: SPACING.md,
@@ -1197,12 +1420,18 @@ const styles = StyleSheet.create({
   },
   guestOptionContainer: {
     flexDirection: "row",
-    marginTop: SPACING.xs,
+    marginTop: SPACING.sm,
+    justifyContent: "space-between",
+    padding: SPACING.xs,
   },
   guestOption: {
     flexDirection: "row",
     alignItems: "center",
-    marginRight: SPACING.xl,
+    padding: SPACING.sm,
+    borderRadius: LAYOUT.borderRadius / 2,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    flex: 0.48, // Close to half width with a small gap
   },
   radioButton: {
     width: 20,
@@ -1259,21 +1488,26 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   createButton: {
-    height: 50,
+    height: 56,
     backgroundColor: COLORS.primary,
     justifyContent: "center",
     alignItems: "center",
     marginHorizontal: SPACING.md,
-    marginBottom: SPACING.xl,
-    marginTop: SPACING.lg,
+    marginBottom: SPACING.xl * 3, // Significantly increase bottom margin to avoid tab bar
+    marginTop: SPACING.xl,
     borderRadius: LAYOUT.borderRadius,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
   },
   disabledButton: {
     opacity: 0.7,
   },
   createButtonText: {
     color: "white",
-    fontSize: FONT_SIZES.md,
+    fontSize: FONT_SIZES.lg,
     fontWeight: "bold",
   },
   contactsContainer: {
@@ -1349,10 +1583,10 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
   },
   addressResultText: {
-    fontSize: FONT_SIZES.md,
-    color: COLORS.text,
     marginLeft: SPACING.xs,
     flex: 1,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
   },
   closeButton: {
     backgroundColor: COLORS.primary,
@@ -1378,48 +1612,132 @@ const styles = StyleSheet.create({
     elevation: 5,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
   // Add styles for date and time pickers
   datePickerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: SPACING.sm,
-    backgroundColor: '#f8f8f8',
-    borderRadius: SPACING.xs,
-    marginTop: SPACING.xs,
+    flexDirection: "row",
+    alignItems: "center",
+    height: LAYOUT.inputHeight,
+    backgroundColor: "#F0F0F0",
+    borderRadius: LAYOUT.borderRadius,
+    paddingHorizontal: SPACING.md,
+    marginBottom: SPACING.sm,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  dateTimeText: {
-    fontSize: FONT_SIZES.md,
-    marginLeft: SPACING.xs,
-    color: COLORS.text,
-  },
   timePickersRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: SPACING.md,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: SPACING.md,
   },
   timePickerContainer: {
-    flex: 0.48,
+    flex: 1,
+    marginRight: SPACING.sm,
+  },
+  timePickerButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: LAYOUT.inputHeight,
+    backgroundColor: "#F0F0F0",
+    borderRadius: LAYOUT.borderRadius,
+    paddingHorizontal: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   timeLabel: {
     fontSize: FONT_SIZES.sm,
+    marginBottom: 4,
     color: COLORS.text,
-    marginBottom: SPACING.xs,
   },
-  timePickerButton: {
+  dateTimeText: {
+    flex: 1,
+    marginLeft: SPACING.sm,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+  },
+  // Add styles for group features
+  groupItem: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: SPACING.sm,
-    backgroundColor: '#f8f8f8',
-    borderRadius: SPACING.xs,
+    backgroundColor: '#FFFFFF',
+    borderRadius: LAYOUT.borderRadius,
+    padding: SPACING.md,
+    marginBottom: SPACING.sm,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  selectedGroup: {
+    backgroundColor: `${COLORS.primary}15`,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: COLORS.primary,
+  },
+  groupInfo: {
+    flex: 1,
+  },
+  groupName: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  groupMemberCount: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.secondaryText,
+    marginTop: 2,
+  },
+  groupsList: {
+    padding: SPACING.sm,
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: COLORS.secondaryText,
+    padding: SPACING.lg,
+  },
+  doneButton: {
+    backgroundColor: COLORS.primary,
+    padding: SPACING.md,
+    borderRadius: LAYOUT.borderRadius,
+    alignItems: 'center',
+    margin: SPACING.md,
+  },
+  doneButtonText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    fontSize: FONT_SIZES.md,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: COLORS.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  modalTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  loader: {
+    padding: SPACING.xl,
   },
 });
 

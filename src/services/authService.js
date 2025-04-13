@@ -37,6 +37,9 @@ const handleError = (error, fallbackMessage) => {
  */
 export const signUp = async (email, password, userData) => {
   try {
+    console.log("signUp called with email:", email);
+    console.log("User data:", JSON.stringify(userData, null, 2));
+    
     // Create user in Supabase Auth with user metadata
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -47,7 +50,16 @@ export const signUp = async (email, password, userData) => {
       },
     });
     
-    if (error) throw error;
+    if (error) {
+      console.error("Signup error:", error);
+      throw error;
+    }
+    
+    console.log("Auth signup successful. User object:", data?.user ? JSON.stringify({
+      id: data.user.id,
+      email: data.user.email,
+      hasSession: !!data.session,
+    }, null, 2) : "No user returned");
     
     // Create/update user profile in the database
     if (data.user) {
@@ -63,12 +75,17 @@ export const signUp = async (email, password, userData) => {
       }
     }
     
-    // Auto sign-in after signup if needed
-    if (!data.session) {
-      console.log('No session after signup, performing manual sign-in');
-      await manualSignIn(email, password);
-    } else {
-      console.log('Session automatically created after signup');
+    // Don't auto sign-in after signup, allow onboarding flow to complete first
+    if (data.session) {
+      // Sign out automatically to force the onboarding flow
+      await supabase.auth.signOut();
+      console.log('Signed out to allow onboarding flow');
+    }
+    
+    // Final validation of user object before returning
+    if (!data.user || !data.user.id) {
+      console.error("Invalid user object returned from signup:", data);
+      throw new Error("Failed to create user properly");
     }
     
     return data.user;

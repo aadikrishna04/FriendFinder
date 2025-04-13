@@ -10,6 +10,7 @@ import ProfileScreen from "../screens/ProfileScreen";
 import UserProfileScreen from "../screens/UserProfileScreen";
 import NotificationScreen from "../screens/NotificationScreen";
 import OnboardingScreen from "../screens/OnboardingScreen";
+import ContactsScreen from "../screens/ContactsScreen";
 import Icon from "react-native-vector-icons/Ionicons"; // or MaterialIcons, Feather etc.
 import { TouchableOpacity, Platform } from "react-native";
 import GroupsScreen from "../screens/GroupsScreen";
@@ -73,6 +74,18 @@ const GroupsStack = () => {
   );
 };
 
+// Create a stack navigator for the profile flow
+const ProfileStack = () => {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="ProfileMain" component={ProfileScreen} />
+      <Stack.Screen name="ContactsScreen" component={ContactsScreen} />
+      <Stack.Screen name="UserProfile" component={UserProfileScreen} />
+      <Stack.Screen name="EditProfile" component={EditEventScreen} />
+    </Stack.Navigator>
+  );
+};
+
 const BottomTabs = () => {
   return (
     <Tab.Navigator
@@ -89,6 +102,8 @@ const BottomTabs = () => {
             iconName = focused ? "notifications" : "notifications-outline";
           } else if (route.name === "Groups") {
             iconName = focused ? "people" : "people-outline";
+          } else if (route.name === "Profile") {
+            iconName = focused ? "person" : "person-outline";
           }
 
           return <Icon name={iconName} size={size} color={color} />;
@@ -119,6 +134,7 @@ const BottomTabs = () => {
       <Tab.Screen name="My Events" component={EventsStack} />
       <Tab.Screen name="Groups" component={GroupsStack} />
       <Tab.Screen name="Notifications" component={NotificationsStack} />
+      <Tab.Screen name="Profile" component={ProfileStack} />
     </Tab.Navigator>
   );
 };

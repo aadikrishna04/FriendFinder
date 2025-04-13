@@ -55,13 +55,41 @@ const SignUpScreen = ({ navigation }) => {
       // Format phone number consistently
       const formattedPhoneNumber = phoneNumber.replace(/\D/g, "");
 
-      await signUp(email, password, {
+      const user = await signUp(email, password, {
         name: fullName,
         phoneNumber: formattedPhoneNumber,
       });
 
-      // Navigate to SignIn without showing an alert
-      navigation.navigate("OnboardingScreen");
+      // Validate that we have a user with an ID
+      if (!user || !user.id) {
+        console.error("Sign up returned invalid user object:", user);
+        throw new Error("Failed to create user account properly");
+      }
+
+      console.log("Successfully created user with ID:", user.id);
+
+      // Use the global startOnboarding function instead of navigation
+      if (global.startOnboarding) {
+        console.log("Starting onboarding process for user:", user.id);
+        
+        const onboardingData = {
+          userId: user.id,
+          email: email,
+          fullName: fullName,
+          phoneNumber: formattedPhoneNumber,
+          password: password
+        };
+        
+        console.log("Onboarding data:", JSON.stringify(onboardingData, null, 2));
+        global.startOnboarding(onboardingData);
+      } else {
+        // Fallback if the global function isn't available
+        console.error("startOnboarding function not available");
+        Alert.alert(
+          "Error",
+          "Could not start onboarding process. Please try again."
+        );
+      }
     } catch (error) {
       Alert.alert("Sign Up Failed", error.message);
     } finally {

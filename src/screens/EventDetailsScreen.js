@@ -8,7 +8,9 @@ import {
   TouchableOpacity,
   SafeAreaView,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  FlatList,
+  Modal
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { supabase } from '../services/supabaseClient';
@@ -42,6 +44,12 @@ const EventDetailsScreen = () => {
   const [loadingAttendees, setLoadingAttendees] = useState(true);
   const [invitation, setInvitation] = useState(null);
   const [loadingInvitation, setLoadingInvitation] = useState(false);
+  const [invitedGroups, setInvitedGroups] = useState([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [showInviteGroupModal, setShowInviteGroupModal] = useState(false);
+  const [userGroups, setUserGroups] = useState([]);
+  const [loadingUserGroups, setLoadingUserGroups] = useState(false);
+  const [selectedGroups, setSelectedGroups] = useState([]);
 
   // First, fetch the event if we only have the ID
   useEffect(() => {
@@ -201,6 +209,126 @@ const EventDetailsScreen = () => {
     checkInvitation();
   }, [eventDetails, currentUser]);
 
+  useEffect(() => {
+    fetchEventGroups();
+  }, [eventId]);
+
+  // Fetch user's groups when invite group modal is opened
+  useEffect(() => {
+    if (showInviteGroupModal) {
+      fetchUserGroups();
+    }
+  }, [showInviteGroupModal]);
+
+  const fetchUserGroups = async () => {
+    if (!currentUser) return;
+    
+    try {
+      setLoadingUserGroups(true);
+      
+      // Fetch groups where user is a member
+      const { data: membershipData, error: membershipError } = await supabase
+        .from('group_members')
+        .select('group_id')
+        .eq('user_id', currentUser.id);
+        
+      if (membershipError) throw membershipError;
+      
+      // Extract group IDs
+      const groupIds = membershipData.map(m => m.group_id);
+      
+      if (groupIds.length > 0) {
+        // Fetch group details
+        const { data: groupsData, error: groupsError } = await supabase
+          .from('groups')
+          .select('id, name, host_id')
+          .in('id', groupIds);
+          
+        if (groupsError) throw groupsError;
+        
+        // Filter out groups that are already invited
+        const alreadyInvitedGroupIds = invitedGroups.map(g => g.id);
+        const filteredGroups = groupsData.filter(g => !alreadyInvitedGroupIds.includes(g.id));
+        
+        // Get member counts for each group
+        const groupsWithCounts = await Promise.all(filteredGroups.map(async (group) => {
+          const { count, error: countError } = await supabase
+            .from('group_members')
+            .select('*', { count: 'exact', head: true })
+            .eq('group_id', group.id);
+            
+          if (countError) throw countError;
+          
+          return {
+            ...group,
+            isHost: group.host_id === currentUser.id,
+            memberCount: count || 0
+          };
+        }));
+        
+        setUserGroups(groupsWithCounts);
+      } else {
+        setUserGroups([]);
+      }
+    } catch (error) {
+      console.error('Error fetching user groups:', error);
+      Alert.alert('Error', 'Failed to load your groups');
+    } finally {
+      setLoadingUserGroups(false);
+    }
+  };
+
+  const fetchEventGroups = async () => {
+    try {
+      setLoadingGroups(true);
+      
+      // Fetch groups invited to this event
+      const { data: eventGroupData, error: eventGroupError } = await supabase
+        .from('event_groups')
+        .select('group_id, invited_by')
+        .eq('event_id', eventId);
+        
+      if (eventGroupError) throw eventGroupError;
+      
+      if (eventGroupData && eventGroupData.length > 0) {
+        // Extract group IDs
+        const groupIds = eventGroupData.map(eg => eg.group_id);
+        
+        // Fetch group details
+        const { data: groupsData, error: groupsError } = await supabase
+          .from('groups')
+          .select('id, name, host_id')
+          .in('id', groupIds);
+          
+        if (groupsError) throw groupsError;
+        
+        // Get member counts for each group
+        const groupsWithCounts = await Promise.all(groupsData.map(async (group) => {
+          const { count, error: countError } = await supabase
+            .from('group_members')
+            .select('*', { count: 'exact', head: true })
+            .eq('group_id', group.id);
+            
+          if (countError) throw countError;
+          
+          return {
+            ...group,
+            memberCount: count || 0
+          };
+        }));
+        
+        setInvitedGroups(groupsWithCounts);
+      } else {
+        setInvitedGroups([]);
+      }
+    } catch (error) {
+      console.error('Error fetching event groups:', error);
+      // Don't show an alert, just quietly fail
+    } finally {
+      setLoadingGroups(false);
+    }
+  };
+
   const toggleAttendance = async () => {
     if (!currentUser) {
       Alert.alert('Authentication Error', 'You must be logged in to RSVP to events');
@@ -302,6 +430,94 @@ const EventDetailsScreen = () => {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const toggleGroupSelection = (group) => {
+    setSelectedGroups(prevSelected => {
+      const isSelected = prevSelected.some(g => g.id === group.id);
+      
+      if (isSelected) {
+        return prevSelected.filter(g => g.id !== group.id);
+      } else {
+        return [...prevSelected, group];
+      }
+    });
+  };
+
+  const inviteGroupsToEvent = async () => {
+    if (selectedGroups.length === 0) {
+      setShowInviteGroupModal(false);
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Create event_groups entries for each selected group
+      const groupEntries = selectedGroups.map(group => ({
+        event_id: eventId,
+        group_id: group.id,
+        invited_by: currentUser.id
+      }));
+      
+      const { error: insertError } = await supabase
+        .from('event_groups')
+        .insert(groupEntries);
+        
+      if (insertError) throw insertError;
+      
+      // Refresh groups data
+      await fetchEventGroups();
+      
+      // Reset selection and close modal
+      setSelectedGroups([]);
+      setShowInviteGroupModal(false);
+      
+      Alert.alert('Success', 'Groups have been invited to this event');
+    } catch (error) {
+      console.error('Error inviting groups to event:', error);
+      Alert.alert('Error', 'Failed to invite groups to event');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderGroupItem = ({ item }) => (
+    <View style={styles.groupItem}>
+      <View style={styles.groupInfo}>
+        <Text style={styles.groupName}>{item.name}</Text>
+        <Text style={styles.groupMeta}>
+          {item.memberCount} {item.memberCount === 1 ? 'member' : 'members'}
+        </Text>
+      </View>
+    </View>
+  );
+
+  const renderInviteGroupItem = ({ item }) => {
+    const isSelected = selectedGroups.some(g => g.id === item.id);
+    
+    return (
+      <TouchableOpacity 
+        style={[styles.groupItem, isSelected && styles.selectedGroupItem]}
+        onPress={() => toggleGroupSelection(item)}
+      >
+        <View style={styles.groupInfo}>
+          <Text style={styles.groupName}>{item.name}</Text>
+          <Text style={styles.groupMeta}>
+            {item.memberCount} {item.memberCount === 1 ? 'member' : 'members'} • 
+            {item.isHost ? ' You are host' : ' Member'}
+          </Text>
+        </View>
+        
+        <View style={styles.checkboxContainer}>
+          {isSelected ? (
+            <MaterialIcons name="check-circle" size={24} color={COLORS.primary} />
+          ) : (
+            <View style={styles.emptyCheckbox} />
+          )}
+        </View>
+      </TouchableOpacity>
+    );
   };
 
   if (initialLoading || (loading && !eventDetails)) {
@@ -554,8 +770,99 @@ const EventDetailsScreen = () => {
               <Text style={styles.rsvpButtonText}>Edit Event</Text>
             </TouchableOpacity>
           )}
+          
+          {/* Invited Groups Section */}
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Invited Groups</Text>
+              
+              {/* Only show invite groups button for the event host */}
+              {eventDetails.host_id === currentUser?.id && (
+                <TouchableOpacity 
+                  style={styles.inviteGroupButton}
+                  onPress={() => setShowInviteGroupModal(true)}
+                >
+                  <MaterialIcons name="add" size={18} color="white" />
+                  <Text style={styles.inviteGroupButtonText}>Invite Groups</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            
+            {loadingGroups ? (
+              <ActivityIndicator size="small" color={COLORS.primary} />
+            ) : invitedGroups.length > 0 ? (
+              <FlatList
+                data={invitedGroups}
+                keyExtractor={item => item.id}
+                renderItem={renderGroupItem}
+                scrollEnabled={false}
+                contentContainerStyle={styles.groupsList}
+              />
+            ) : (
+              <Text style={styles.emptyText}>No groups invited to this event</Text>
+            )}
+          </View>
         </View>
       </ScrollView>
+
+      {/* Invite Groups Modal */}
+      <Modal
+        visible={showInviteGroupModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowInviteGroupModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Invite Groups</Text>
+              <TouchableOpacity onPress={() => setShowInviteGroupModal(false)}>
+                <MaterialIcons name="close" size={24} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+            
+            {loadingUserGroups ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={COLORS.primary} />
+                <Text style={styles.loadingText}>Loading groups...</Text>
+              </View>
+            ) : (
+              <>
+                <FlatList
+                  data={userGroups}
+                  keyExtractor={(item) => item.id.toString()}
+                  renderItem={renderInviteGroupItem}
+                  contentContainerStyle={styles.groupsList}
+                  ListEmptyComponent={
+                    <View style={styles.emptyContainer}>
+                      <Text style={styles.emptyText}>
+                        {invitedGroups.length > 0 
+                          ? 'All your groups are already invited to this event' 
+                          : 'You don\'t have any groups yet. Create a group first to invite.'}
+                      </Text>
+                    </View>
+                  }
+                />
+                
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity 
+                    style={[
+                      styles.inviteButton,
+                      selectedGroups.length === 0 && styles.disabledButton
+                    ]}
+                    disabled={selectedGroups.length === 0}
+                    onPress={inviteGroupsToEvent}
+                  >
+                    <Text style={styles.inviteButtonText}>
+                      Invite Groups ({selectedGroups.length})
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -772,6 +1079,136 @@ const styles = StyleSheet.create({
   responseStatusText: {
     fontSize: FONT_SIZES.md,
     color: COLORS.text,
+  },
+  sectionContainer: {
+    marginTop: SPACING.lg,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  inviteGroupButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+  },
+  inviteGroupButtonText: {
+    color: 'white',
+    fontSize: FONT_SIZES.sm,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  groupItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: SPACING.md,
+    marginBottom: SPACING.sm,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  selectedGroupItem: {
+    backgroundColor: `${COLORS.primary}15`,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  groupInfo: {
+    flex: 1,
+  },
+  groupName: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginBottom: 2,
+  },
+  groupMeta: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
+  },
+  groupsList: {
+    paddingTop: SPACING.sm,
+  },
+  emptyText: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.placeholder,
+    marginTop: SPACING.sm,
+  },
+  checkboxContainer: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyCheckbox: {
+    width: 22,
+    height: 22,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    borderRadius: 12,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    width: '90%',
+    maxHeight: '80%',
+    paddingBottom: SPACING.md,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  modalTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  modalFooter: {
+    padding: SPACING.md,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    alignItems: 'center',
+  },
+  inviteButton: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: 8,
+    alignItems: 'center',
+    width: '100%',
+  },
+  inviteButtonText: {
+    color: 'white',
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+  },
+  disabledButton: {
+    backgroundColor: COLORS.border,
+    opacity: 0.7,
+  },
+  emptyContainer: {
+    padding: SPACING.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
 

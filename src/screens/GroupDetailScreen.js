@@ -13,7 +13,7 @@ import {
   ScrollView,
   SafeAreaView
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import * as Contacts from 'expo-contacts';
 import { supabase } from '../services/supabaseClient';
 import { COLORS, SPACING, FONT_SIZES } from '../constants';
@@ -21,11 +21,15 @@ import { COLORS, SPACING, FONT_SIZES } from '../constants';
 const GroupDetailScreen = ({ route, navigation }) => {
   const { groupId, groupName } = route.params;
   const [members, setMembers] = useState([]);
+  const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingEvents, setLoadingEvents] = useState(true);
   const [userId, setUserId] = useState(null);
   const [isOwner, setIsOwner] = useState(false);
   const [addMemberModalVisible, setAddMemberModalVisible] = useState(false);
-  const [contactList, setContactList] = useState([]);
+  const [appContacts, setAppContacts] = useState([]);
+  const [selectedContacts, setSelectedContacts] = useState([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredContacts, setFilteredContacts] = useState([]);
   const [groupSettings, setGroupSettings] = useState({
@@ -37,36 +41,44 @@ const GroupDetailScreen = ({ route, navigation }) => {
     isPrivate: true,
     memberLimit: 20
   });
+  const [activeTab, setActiveTab] = useState('members');
 
   useEffect(() => {
     navigation.setOptions({
       title: groupName || 'Group Details',
       headerRight: () => (
-        <TouchableOpacity 
-          style={styles.headerButton} 
-          onPress={() => setAddMemberModalVisible(true)}
-        >
-          <Ionicons name="person-add" size={24} color={COLORS.primary} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row' }}>
+          <TouchableOpacity 
+            style={styles.headerButton} 
+            onPress={() => {
+              setSelectedContacts([]);
+              setAddMemberModalVisible(true);
+              loadAppContacts();
+            }}
+          >
+            <Ionicons name="person-add" size={24} color={COLORS.primary} />
+          </TouchableOpacity>
+        </View>
       ),
     });
 
     fetchUserAndMembers();
-    loadContacts();
+    fetchGroupEvents();
   }, [groupId, navigation, groupName]);
 
   useEffect(() => {
-    if (contactList.length > 0 && searchQuery) {
+    if (appContacts.length > 0 && searchQuery) {
       setFilteredContacts(
-        contactList.filter(contact => 
+        appContacts.filter(contact => 
           contact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          (contact.phoneNumber && contact.phoneNumber.includes(searchQuery))
+          (contact.email && contact.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (contact.phone_number && contact.phone_number.includes(searchQuery))
         )
       );
     } else {
-      setFilteredContacts(contactList);
+      setFilteredContacts(appContacts);
     }
-  }, [searchQuery, contactList]);
+  }, [searchQuery, appContacts]);
 
   const fetchUserAndMembers = async () => {
     try {
@@ -173,29 +185,91 @@ const GroupDetailScreen = ({ route, navigation }) => {
     }
   };
   
-  const loadContacts = async () => {
+  const fetchGroupEvents = async () => {
     try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status === 'granted') {
-        const { data } = await Contacts.getContactsAsync({
-          fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
-        });
+      setLoadingEvents(true);
+      
+      // Fetch events that this group is invited to
+      const { data: eventGroupData, error: eventGroupError } = await supabase
+        .from('event_groups')
+        .select('event_id, created_at')
+        .eq('group_id', groupId);
         
-        if (data.length > 0) {
-          const formattedContacts = data
-            .filter(c => c.name && c.phoneNumbers && c.phoneNumbers.length > 0)
-            .map(contact => ({
-              id: contact.id,
-              name: contact.name,
-              phoneNumber: contact.phoneNumbers[0]?.number || '',
-            }));
+      if (eventGroupError) throw eventGroupError;
+      
+      if (eventGroupData && eventGroupData.length > 0) {
+        // Extract event IDs
+        const eventIds = eventGroupData.map(eg => eg.event_id);
+        
+        // Fetch the event details
+        const { data: eventsData, error: eventsError } = await supabase
+          .from('events')
+          .select('*, users:host_id(name, email)')
+          .in('id', eventIds)
+          .order('start_time', { ascending: true });
           
-          setContactList(formattedContacts);
-          setFilteredContacts(formattedContacts);
-        }
+        if (eventsError) throw eventsError;
+        
+        // Process events with date formatting
+        const processedEvents = eventsData.map(event => ({
+          ...event,
+          formattedDate: new Date(event.start_time).toLocaleDateString(),
+          formattedTime: new Date(event.start_time).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
+          }),
+          host: event.users?.name || event.users?.email?.split('@')[0] || 'Unknown Host'
+        }));
+        
+        setEvents(processedEvents);
+      } else {
+        setEvents([]);
       }
     } catch (error) {
-      console.error('Error loading contacts:', error);
+      console.error('Error fetching group events:', error);
+      Alert.alert('Error', 'Could not load group events');
+    } finally {
+      setLoadingEvents(false);
+    }
+  };
+  
+  const loadAppContacts = async () => {
+    try {
+      setLoadingContacts(true);
+      
+      // Get current user
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      
+      // Get user's contacts from the contacts table (app users only)
+      const { data: contactsData, error: contactsError } = await supabase
+        .from('contacts')
+        .select(`
+          id, 
+          contact_id,
+          name, 
+          email, 
+          phone_number,
+          users:contact_id(id, name, email, phone_number)
+        `)
+        .eq('owner_id', user.id);
+        
+      if (contactsError) throw contactsError;
+      
+      // Filter out any contacts that are already members of the group
+      const existingMemberIds = members.map(m => m.userId);
+      
+      const filteredAppContacts = contactsData.filter(
+        contact => !existingMemberIds.includes(contact.contact_id)
+      );
+      
+      setAppContacts(filteredAppContacts);
+      setFilteredContacts(filteredAppContacts);
+    } catch (error) {
+      console.error('Error loading app contacts:', error);
+      Alert.alert('Error', 'Could not load contacts');
+    } finally {
+      setLoadingContacts(false);
     }
   };
 
@@ -224,77 +298,56 @@ const GroupDetailScreen = ({ route, navigation }) => {
     }
   };
 
-  const addMemberToGroup = async (contact) => {
+  const addSelectedMembersToGroup = async () => {
+    if (selectedContacts.length === 0) {
+      setAddMemberModalVisible(false);
+      return;
+    }
+    
     try {
       // Check if the group is at capacity
-      if (members.length >= groupSettings.memberLimit) {
-        Alert.alert('Group Full', `This group has reached its member limit of ${groupSettings.memberLimit}`);
-        return;
-      }
-      
-      // First check if user exists in the system
-      const { data: userData, error: userError } = await supabase
-        .from('profiles')
-        .select('user_id')
-        .eq('phone_number', contact.phoneNumber)
-        .single();
-      
-      if (userError && userError.code !== 'PGRST116') {
-        throw userError;
-      }
-      
-      if (!userData) {
-        // User not registered, send invitation
+      if (members.length + selectedContacts.length > groupSettings.memberLimit) {
         Alert.alert(
-          'User not registered',
-          'This contact is not registered in the app. Would you like to send an invitation?',
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel',
-            },
-            {
-              text: 'Send Invitation',
-              onPress: () => sendInvitation(contact),
-            },
-          ]
+          'Group Limit', 
+          `You can only add ${groupSettings.memberLimit - members.length} more members to this group`
         );
         return;
       }
       
-      // Check if user is already a member
-      const { data: existingMember, error: memberCheckError } = await supabase
+      // Prepare the group member records
+      const newMembers = selectedContacts.map(contact => ({
+        group_id: groupId,
+        user_id: contact.contact_id,
+        added_by: userId,
+        is_owner: false
+      }));
+      
+      // Insert all selected members
+      const { error } = await supabase
         .from('group_members')
-        .select('id')
-        .eq('group_id', groupId)
-        .eq('user_id', userData.user_id);
+        .insert(newMembers);
         
-      if (memberCheckError) throw memberCheckError;
+      if (error) throw error;
       
-      if (existingMember && existingMember.length > 0) {
-        Alert.alert('Already a member', 'This user is already a member of this group');
-        return;
-      }
-      
-      // Add member to group
-      const { error: addError } = await supabase
-        .from('group_members')
-        .insert({
-          group_id: groupId,
-          user_id: userData.user_id,
-          added_by: userId,
-          is_owner: false
-        });
-        
-      if (addError) throw addError;
-      
-      Alert.alert('Success', 'Member added to group');
+      Alert.alert('Success', `Added ${selectedContacts.length} members to the group`);
       fetchUserAndMembers();
       setAddMemberModalVisible(false);
     } catch (error) {
-      console.error('Error adding member:', error);
-      Alert.alert('Error', 'Could not add member to group');
+      console.error('Error adding members:', error);
+      Alert.alert('Error', 'Could not add members to group');
     }
+  };
+
+  const toggleContactSelection = (contact) => {
+    setSelectedContacts(prevSelected => {
+      const isSelected = prevSelected.some(c => c.id === contact.id);
+      
+      if (isSelected) {
+        return prevSelected.filter(c => c.id !== contact.id);
+      } else {
+        return [...prevSelected, contact];
+      }
+    });
   };
 
   const sendInvitation = async (contact) => {
@@ -303,7 +356,7 @@ const GroupDetailScreen = ({ route, navigation }) => {
       const { data: existingInvitation, error: checkError } = await supabase
         .from('invitations')
         .select('id')
-        .eq('phone_number', contact.phoneNumber)
+        .eq('phone_number', contact.phone_number)
         .eq('invited_by', userId);
         
       if (checkError) throw checkError;
@@ -321,7 +374,7 @@ const GroupDetailScreen = ({ route, navigation }) => {
         const { error: inviteError } = await supabase
           .from('invitations')
           .insert({
-            phone_number: contact.phoneNumber,
+            phone_number: contact.phone_number,
             name: contact.name,
             invited_by: userId,
             message: `Join my group "${groupName}" on FriendFinder!`,
@@ -440,19 +493,57 @@ const GroupDetailScreen = ({ route, navigation }) => {
     </View>
   );
 
-  const renderContactItem = ({ item }) => (
+  const renderContactItem = ({ item }) => {
+    const isSelected = selectedContacts.some(c => c.id === item.id);
+    
+    return (
+      <TouchableOpacity 
+        style={[styles.contactItem, isSelected && styles.selectedContactItem]}
+        onPress={() => toggleContactSelection(item)}
+      >
+        <View style={styles.contactAvatar}>
+          <Text style={styles.contactInitials}>
+            {item.name.charAt(0).toUpperCase()}
+          </Text>
+        </View>
+        <View style={styles.contactInfo}>
+          <Text style={styles.contactName}>{item.name}</Text>
+          <Text style={styles.contactPhone}>{item.email || item.phone_number || 'No contact info'}</Text>
+        </View>
+        <View style={styles.checkboxContainer}>
+          {isSelected ? (
+            <MaterialIcons name="check-circle" size={24} color={COLORS.primary} />
+          ) : (
+            <View style={styles.emptyCheckbox} />
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderEventItem = ({ item }) => (
     <TouchableOpacity 
-      style={styles.contactItem}
-      onPress={() => addMemberToGroup(item)}
+      style={styles.eventItem}
+      onPress={() => navigation.navigate('EventDetails', { eventId: item.id })}
     >
-      <View style={styles.contactAvatar}>
-        <Text style={styles.contactInitials}>
-          {item.name.split(' ').map(n => n[0]).join('').toUpperCase()}
-        </Text>
+      <View style={styles.eventInfo}>
+        <Text style={styles.eventName}>{item.title || 'Untitled Event'}</Text>
+        <View style={styles.eventMetaRow}>
+          <Ionicons name="calendar" size={14} color={COLORS.textLight} style={styles.eventIcon} />
+          <Text style={styles.eventMeta}>{item.formattedDate}</Text>
+        </View>
+        <View style={styles.eventMetaRow}>
+          <Ionicons name="time" size={14} color={COLORS.textLight} style={styles.eventIcon} />
+          <Text style={styles.eventMeta}>{item.formattedTime}</Text>
+        </View>
+        <View style={styles.eventMetaRow}>
+          <Ionicons name="person" size={14} color={COLORS.textLight} style={styles.eventIcon} />
+          <Text style={styles.eventMeta}>By {item.host}</Text>
+        </View>
       </View>
-      <View style={styles.contactInfo}>
-        <Text style={styles.contactName}>{item.name}</Text>
-        <Text style={styles.contactPhone}>{item.phoneNumber}</Text>
+      
+      <View style={styles.eventActions}>
+        <Ionicons name="chevron-forward" size={24} color={COLORS.textLight} />
       </View>
     </TouchableOpacity>
   );
@@ -496,32 +587,85 @@ const GroupDetailScreen = ({ route, navigation }) => {
           )}
         </View>
         
-        {/* Members list */}
-        {members.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No members in this group yet</Text>
-            <TouchableOpacity 
-              style={styles.addMemberButton}
-              onPress={() => setAddMemberModalVisible(true)}
-            >
-              <Text style={styles.addMemberButtonText}>Add Members</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <FlatList
-            data={members}
-            keyExtractor={(item) => item.id.toString()}
-            renderItem={renderMemberItem}
-            contentContainerStyle={styles.listContent}
-            ListFooterComponent={() => (
+        {/* Tabs for Members and Events */}
+        <View style={styles.tabContainer}>
+          <TouchableOpacity 
+            style={[styles.tab, activeTab === 'members' && styles.activeTab]}
+            onPress={() => setActiveTab('members')}
+          >
+            <Text style={[styles.tabText, activeTab === 'members' && styles.activeTabText]}>
+              Members
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.tab, activeTab === 'events' && styles.activeTab]}
+            onPress={() => setActiveTab('events')}
+          >
+            <Text style={[styles.tabText, activeTab === 'events' && styles.activeTabText]}>
+              Events
+            </Text>
+          </TouchableOpacity>
+        </View>
+        
+        {/* Content based on active tab */}
+        {activeTab === 'members' ? (
+          // Members list
+          members.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>No members in this group yet</Text>
               <TouchableOpacity 
                 style={styles.addMemberButton}
-                onPress={() => setAddMemberModalVisible(true)}
+                onPress={() => {
+                  setSelectedContacts([]);
+                  setAddMemberModalVisible(true);
+                  loadAppContacts();
+                }}
               >
-                <Text style={styles.addMemberButtonText}>Add More Members</Text>
+                <Text style={styles.addMemberButtonText}>Add Members</Text>
               </TouchableOpacity>
-            )}
-          />
+            </View>
+          ) : (
+            <FlatList
+              data={members}
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={renderMemberItem}
+              contentContainerStyle={styles.listContent}
+              ListFooterComponent={() => (
+                <TouchableOpacity 
+                  style={styles.addMemberButton}
+                  onPress={() => {
+                    setSelectedContacts([]);
+                    setAddMemberModalVisible(true);
+                    loadAppContacts();
+                  }}
+                >
+                  <Text style={styles.addMemberButtonText}>Add More Members</Text>
+                </TouchableOpacity>
+              )}
+            />
+          )
+        ) : (
+          // Events list
+          loadingEvents ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={COLORS.primary} />
+              <Text style={styles.loadingText}>Loading events...</Text>
+            </View>
+          ) : events.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>No events for this group</Text>
+              <Text style={styles.emptySubText}>
+                When someone invites this group to an event, it will appear here.
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={events}
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={renderEventItem}
+              contentContainerStyle={styles.listContent}
+            />
+          )
         )}
       </View>
       
@@ -549,15 +693,43 @@ const GroupDetailScreen = ({ route, navigation }) => {
               placeholderTextColor={COLORS.textLight}
             />
             
-            <FlatList
-              data={filteredContacts}
-              keyExtractor={(item) => item.id.toString()}
-              renderItem={renderContactItem}
-              contentContainerStyle={styles.contactListContent}
-              ListEmptyComponent={
-                <Text style={styles.emptyText}>No contacts found</Text>
-              }
-            />
+            {loadingContacts ? (
+              <View style={styles.loadingContactsContainer}>
+                <ActivityIndicator size="large" color={COLORS.primary} />
+                <Text style={styles.loadingText}>Loading contacts...</Text>
+              </View>
+            ) : (
+              <>
+                <FlatList
+                  data={filteredContacts}
+                  keyExtractor={(item) => item.id.toString()}
+                  renderItem={renderContactItem}
+                  contentContainerStyle={styles.contactListContent}
+                  ListEmptyComponent={
+                    <Text style={styles.emptyText}>
+                      {appContacts.length === 0 
+                        ? "No app contacts found. Add contacts in your profile first." 
+                        : "No contacts match your search."}
+                    </Text>
+                  }
+                />
+                
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity 
+                    style={[
+                      styles.addSelectedButton,
+                      selectedContacts.length === 0 && styles.disabledButton
+                    ]}
+                    disabled={selectedContacts.length === 0}
+                    onPress={addSelectedMembersToGroup}
+                  >
+                    <Text style={styles.addSelectedButtonText}>
+                      Add Selected ({selectedContacts.length})
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -889,7 +1061,127 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: FONT_SIZES.medium,
     fontWeight: '600',
-  }
+  },
+  selectedContactItem: {
+    backgroundColor: `${COLORS.primary}20`, // 20% opacity of primary color
+  },
+  checkboxContainer: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyCheckbox: {
+    width: 22,
+    height: 22,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    borderRadius: 12,
+  },
+  modalFooter: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingTop: 10,
+    marginTop: 10,
+    paddingBottom: 20,
+  },
+  addSelectedButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addSelectedButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: FONT_SIZES.medium,
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  loadingContactsContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 10,
+    color: COLORS.textLight,
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.white,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: SPACING.sm,
+    alignItems: 'center',
+  },
+  activeTab: {
+    borderBottomWidth: 2,
+    borderBottomColor: COLORS.primary,
+  },
+  tabText: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: '500',
+    color: COLORS.textLight,
+  },
+  activeTabText: {
+    color: COLORS.primary,
+    fontWeight: 'bold',
+  },
+  eventItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: COLORS.cardBackground,
+    borderRadius: 8,
+    padding: SPACING.medium,
+    marginBottom: SPACING.small,
+  },
+  eventInfo: {
+    flex: 1,
+  },
+  eventName: {
+    fontSize: FONT_SIZES.medium,
+    fontWeight: '500',
+    color: COLORS.text,
+    marginBottom: SPACING.xs,
+  },
+  eventMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  eventIcon: {
+    marginRight: 4,
+  },
+  eventMeta: {
+    fontSize: FONT_SIZES.small,
+    color: COLORS.textLight,
+  },
+  eventActions: {
+    padding: 4,
+  },
+  emptySubText: {
+    color: COLORS.textLight,
+    textAlign: 'center',
+    marginTop: SPACING.xs,
+    fontSize: FONT_SIZES.small,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: SPACING.sm,
+    color: COLORS.textLight,
+  },
 });
 
 export default GroupDetailScreen; 
