@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   TextInput,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { supabase } from "../services/supabaseClient";
@@ -310,47 +312,52 @@ const GroupsScreen = ({ navigation }) => {
         visible={createGroupModalVisible}
         onRequestClose={() => setCreateGroupModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Create New Group</Text>
-              <TouchableOpacity
-                onPress={() => setCreateGroupModalVisible(false)}
-              >
-                <MaterialIcons name="close" size={24} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalBody}>
-              <Text style={styles.inputLabel}>Group Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter group name"
-                value={newGroupName}
-                onChangeText={setNewGroupName}
-                autoFocus
-              />
-
-              <View style={styles.modalActions}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={{flex: 1}}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContainer}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Create New Group</Text>
                 <TouchableOpacity
-                  style={[
-                    styles.createButton,
-                    (!newGroupName.trim() || creatingGroup) &&
-                      styles.disabledButton,
-                  ]}
-                  onPress={handleCreateGroup}
-                  disabled={!newGroupName.trim() || creatingGroup}
+                  onPress={() => setCreateGroupModalVisible(false)}
                 >
-                  {creatingGroup ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.createButtonText}>Create Group</Text>
-                  )}
+                  <MaterialIcons name="close" size={24} color={COLORS.text} />
                 </TouchableOpacity>
+              </View>
+
+              <View style={styles.modalBody}>
+                <Text style={styles.inputLabel}>Group Name</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter group name"
+                  value={newGroupName}
+                  onChangeText={setNewGroupName}
+                  autoFocus
+                />
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.createButton,
+                      (!newGroupName.trim() || creatingGroup) &&
+                        styles.disabledButton,
+                    ]}
+                    onPress={handleCreateGroup}
+                    disabled={!newGroupName.trim() || creatingGroup}
+                  >
+                    {creatingGroup ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.createButtonText}>Create Group</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     );
   };
@@ -551,6 +558,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white, // Changed from semi-transparent black to white
     justifyContent: "center",
     alignItems: "center",
+    paddingBottom: Platform.OS === 'ios' ? 30 : 0, // Extra padding on iOS to account for keyboard
   },
   modalContainer: {
     backgroundColor: COLORS.white,
