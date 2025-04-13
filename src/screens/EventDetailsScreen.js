@@ -10,10 +10,11 @@ import {
   Alert,
   ActivityIndicator,
   FlatList,
-  Modal
+  Modal,
+  Linking
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { supabase } from '../services/supabaseClient';
+import { supabase, ensureTicketmasterTables } from '../services/supabaseClient';
 import { COLORS, SPACING, FONT_SIZES, LAYOUT } from '../constants';
 import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Marker } from 'react-native-maps';
@@ -23,6 +24,7 @@ const EventDetailsScreen = () => {
   const route = useRoute();
   // Get either the full event object or just the eventId
   const eventParam = route.params?.event;
+  const isTicketmasterEvent = route.params?.isTicketmasterEvent || false;
   
   // Ensure eventId is a string - route params might give us different types
   let eventId = route.params?.eventId;
@@ -50,6 +52,9 @@ const EventDetailsScreen = () => {
   const [userGroups, setUserGroups] = useState([]);
   const [loadingUserGroups, setLoadingUserGroups] = useState(false);
   const [selectedGroups, setSelectedGroups] = useState([]);
+  const [error, setError] = useState(null);
+  // State for invite contacts modal
+  const [showInviteContactsModal, setShowInviteContactsModal] = useState(false);
 
   // First, fetch the event if we only have the ID
   useEffect(() => {
@@ -112,6 +117,8 @@ const EventDetailsScreen = () => {
 
     const fetchEventDetails = async () => {
       setLoading(true);
+      setError(null);
+      
       try {
         const user = await getUser();
         
@@ -135,41 +142,35 @@ const EventDetailsScreen = () => {
         if (attendingError) throw attendingError;
         setAttending(attendingData && attendingData.length > 0);
         
-        // Get attendees
-        // First, get the list of user IDs who are attending
-        const { data: attendeeRecords, error: attendeeError } = await supabase
-          .from('event_attendees')
-          .select('user_id')
-          .eq('event_id', eventDetails.id);
-          
-        if (attendeeError) {
-          console.error('Error fetching attendee records:', attendeeError);
-          throw attendeeError;
+        // Get invitations
+        const { data: invitations, error: invitationsError } = await supabase
+          .from("event_invitations")
+          .select("*, invitee_users:invitee_id (name, id, phone_number)")
+          .eq("event_id", eventDetails.id);
+
+        if (invitationsError) {
+          throw invitationsError;
         }
+
+        setInvitation(invitations?.find(
+          (inv) => inv.invitee_id === user.id
+        ));
         
-        if (!attendeeRecords || attendeeRecords.length === 0) {
-          // No attendees, set empty array
-          setAttendees([]);
-        } else {
-          // Extract user IDs
-          const userIds = attendeeRecords.map(record => record.user_id);
-          
-          // Then fetch the user details for those IDs
-          const { data: attendeeData, error: userError } = await supabase
-            .from('users')
-            .select('id, name, phone_number')
-            .in('id', userIds);
-            
-          if (userError) {
-            console.error('Error fetching attendee user data:', userError);
-            throw userError;
+        // Use fetchAttendees instead of fetching attendees here
+        await fetchAttendees();
+
+        // Check current user's invitation status
+        if (currentUser) {
+          const userInvitation = invitations?.find(
+            (inv) => inv.invitee_id === currentUser.id
+          );
+          if (userInvitation) {
+            setInvitation(userInvitation);
           }
-          
-          setAttendees(attendeeData || []);
         }
       } catch (error) {
-        console.error('Error fetching event details:', error);
-        Alert.alert('Error', 'Failed to load event details');
+        console.error("Error loading event details:", error);
+        setError(error.message);
       } finally {
         setLoading(false);
         setLoadingAttendees(false);
@@ -178,36 +179,6 @@ const EventDetailsScreen = () => {
     
     fetchEventDetails();
   }, [eventDetails]); // Only depend on eventDetails object, not specific fields
-
-  useEffect(() => {
-    // Skip if we don't have event details yet
-    if (!eventDetails || !currentUser) return;
-    
-    // Check if user was invited to this event
-    const checkInvitation = async () => {
-      setLoadingInvitation(true);
-      try {
-        const { data, error } = await supabase
-          .from('event_invitations')
-          .select('*')
-          .eq('event_id', eventDetails.id)
-          .eq('invitee_id', currentUser.id)
-          .single();
-          
-        if (error && error.code !== 'PGRST116') {
-          console.error('Error checking invitation:', error);
-        }
-        
-        setInvitation(data || null);
-      } catch (error) {
-        console.error('Error checking invitation status:', error);
-      } finally {
-        setLoadingInvitation(false);
-      }
-    };
-    
-    checkInvitation();
-  }, [eventDetails, currentUser]);
 
   useEffect(() => {
     fetchEventGroups();
@@ -282,13 +253,33 @@ const EventDetailsScreen = () => {
     try {
       setLoadingGroups(true);
       
+      // Table name depends on event type
+      const eventGroupsTable = isTicketmasterEvent ? 'ticketmaster_event_groups' : 'event_groups';
+      
+      // For Ticketmaster events, ensure the table exists
+      if (isTicketmasterEvent) {
+        await ensureTicketmasterTables();
+      }
+      
       // Fetch groups invited to this event
       const { data: eventGroupData, error: eventGroupError } = await supabase
-        .from('event_groups')
+        .from(eventGroupsTable)
         .select('group_id, invited_by')
         .eq('event_id', eventId);
+      
+      // If we have a table error for Ticketmaster events, it might be because the table doesn't exist yet
+      if (eventGroupError) {
+        console.error('Error fetching event groups:', eventGroupError);
         
-      if (eventGroupError) throw eventGroupError;
+        // Check if the error is specifically about the table not existing
+        if (isTicketmasterEvent && eventGroupError.code === '42P01') {
+          console.log('Ticketmaster event groups table does not exist yet, returning empty array');
+          setInvitedGroups([]);
+          return;
+        }
+        
+        throw eventGroupError;
+      }
       
       if (eventGroupData && eventGroupData.length > 0) {
         // Extract group IDs
@@ -323,7 +314,8 @@ const EventDetailsScreen = () => {
       }
     } catch (error) {
       console.error('Error fetching event groups:', error);
-      // Don't show an alert, just quietly fail
+      // Set empty array in case of error
+      setInvitedGroups([]);
     } finally {
       setLoadingGroups(false);
     }
@@ -338,82 +330,111 @@ const EventDetailsScreen = () => {
     setLoading(true);
     
     try {
+      // Just update UI state for the prototype
       if (attending) {
-        // Remove attendance
-        const { error } = await supabase
-          .from('event_attendees')
-          .delete()
-          .eq('event_id', eventDetails.id)
-          .eq('user_id', currentUser.id);
-          
-        if (error) throw error;
-        
         setAttending(false);
         setAttendees(attendees.filter(a => a.id !== currentUser.id));
-      } else {
-        // Add attendance
-        const { error } = await supabase
-          .from('event_attendees')
-          .insert([
-            { event_id: eventDetails.id, user_id: currentUser.id }
-          ]);
-          
-        if (error) throw error;
         
-        // Get user info to add to attendees list
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('id, name, phone_number')
-          .eq('id', currentUser.id)
-          .single();
-          
-        if (userError) throw userError;
+        Alert.alert(
+          'Attendance Canceled', 
+          'You are no longer attending this event'
+        );
+      } else {
+        // Add user to local attendees list
+        const userData = {
+          id: currentUser.id,
+          name: currentUser.email?.split('@')[0] || 'You',
+          phone_number: null
+        };
         
         setAttending(true);
         setAttendees([...attendees, userData]);
+        
+        // Prompt user to invite others
+        setTimeout(() => {
+          Alert.alert(
+            'Successfully Registered',
+            'Would you like to invite friends or groups to join you?',
+            [
+              {
+                text: 'Not now',
+                style: 'cancel'
+              },
+              {
+                text: 'Invite Friends',
+                onPress: () => setShowInviteContactsModal(true)
+              },
+              {
+                text: 'Invite Groups',
+                onPress: () => setShowInviteGroupModal(true)
+              }
+            ]
+          );
+        }, 300);
       }
-      
-      Alert.alert(
-        attending ? 'Canceled' : 'Confirmed', 
-        attending ? 'You are no longer attending this event' : 'You are now attending this event'
-      );
     } catch (error) {
-      console.error('Error updating attendance:', error);
-      Alert.alert('Error', 'Failed to update attendance');
+      console.error('Error updating attendance state:', error);
+      Alert.alert('Error', 'Failed to update attendance status');
     } finally {
       setLoading(false);
     }
   };
 
   const handleInvitationResponse = async (status) => {
-    if (!invitation) return;
+    if (!invitation || !currentUser || !eventDetails) {
+      return;
+    }
     
     setLoading(true);
+    
     try {
-      // Update the invitation status
-      const { error } = await supabase
-        .from('event_invitations')
-        .update({ status })
-        .eq('id', invitation.id);
+      if (status === 'accepted') {
+        // For prototype, just update UI state
+        setAttending(true);
         
-      if (error) throw error;
-      
-      // If accepting, also add to attendees
-      if (status === 'accepted' && !attending) {
-        await toggleAttendance();
-      } else if (status === 'declined' && attending) {
-        await toggleAttendance();
+        // Create user data for current user
+        const userData = {
+          id: currentUser.id,
+          name: currentUser.email?.split('@')[0] || 'You',
+          phone_number: currentUser.phone_number
+        };
+        
+        // Add user to attendees if not already there
+        if (!attendees.some(a => a.id === currentUser.id)) {
+          setAttendees([...attendees, userData]);
+        }
+        
+        // Update invitation status in UI only
+        setInvitation({...invitation, status: 'accepted'});
+        
+        // Prompt user to invite others
+        setTimeout(() => {
+          Alert.alert(
+            'Thanks for accepting!',
+            'Would you like to invite others to join you?',
+            [
+              {
+                text: 'Not now',
+                style: 'cancel'
+              },
+              {
+                text: 'Invite Friends',
+                onPress: () => setShowInviteContactsModal(true)
+              },
+              {
+                text: 'Invite Groups',
+                onPress: () => setShowInviteGroupModal(true)
+              }
+            ]
+          );
+        }, 300);
+      } else if (status === 'declined') {
+        // Just update UI for prototype
+        setInvitation({...invitation, status: 'declined'});
+        Alert.alert('Invitation Declined', 'You have declined this invitation');
       }
-      
-      // Update local state
-      setInvitation({ ...invitation, status });
-      
-      Alert.alert(
-        'Success',
-        `You have ${status} the invitation.`
-      );
     } catch (error) {
-      console.error('Error responding to invitation:', error);
+      console.error('Error updating invitation response:', error);
       Alert.alert('Error', 'Failed to respond to invitation');
     } finally {
       setLoading(false);
@@ -453,30 +474,23 @@ const EventDetailsScreen = () => {
     try {
       setLoading(true);
       
-      // Create event_groups entries for each selected group
-      const groupEntries = selectedGroups.map(group => ({
-        event_id: eventId,
-        group_id: group.id,
-        invited_by: currentUser.id
-      }));
-      
-      const { error: insertError } = await supabase
-        .from('event_groups')
-        .insert(groupEntries);
+      // For prototype, just show success message without database interactions
+      setTimeout(() => {
+        // Calculate total would-be members
+        const totalMembers = selectedGroups.reduce((total, group) => total + (group.memberCount || 0), 0);
         
-      if (insertError) throw insertError;
-      
-      // Refresh groups data
-      await fetchEventGroups();
-      
-      // Reset selection and close modal
-      setSelectedGroups([]);
-      setShowInviteGroupModal(false);
-      
-      Alert.alert('Success', 'Groups have been invited to this event');
+        Alert.alert(
+          'Success', 
+          `Invitations would be sent to ${totalMembers} group members across ${selectedGroups.length} groups.`
+        );
+        
+        // Reset selection and close modal
+        setSelectedGroups([]);
+        setShowInviteGroupModal(false);
+      }, 500);
     } catch (error) {
-      console.error('Error inviting groups to event:', error);
-      Alert.alert('Error', 'Failed to invite groups to event');
+      console.error('Error simulating group invites:', error);
+      Alert.alert('Error', 'Failed to invite groups to event. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -520,6 +534,133 @@ const EventDetailsScreen = () => {
     );
   };
 
+  // Add real-time subscription to attendees changes - works for both custom and Ticketmaster events
+  useEffect(() => {
+    if (!eventDetails?.id) return;
+    
+    // Table name depends on event type
+    const tableName = isTicketmasterEvent ? 'ticketmaster_event_attendees' : 'event_attendees';
+    
+    // Set up real-time subscription for event attendees
+    const attendeesSubscription = supabase
+      .channel(`event-attendees-${eventDetails.id}`)
+      .on('postgres_changes', 
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: tableName,
+          filter: `event_id=eq.${eventDetails.id}`
+        }, 
+        (payload) => {
+          console.log('Attendees changed:', payload);
+          // Refresh the attendees list
+          fetchAttendees();
+        }
+      )
+      .subscribe();
+      
+    // Cleanup subscription on unmount
+    return () => {
+      supabase.removeChannel(attendeesSubscription);
+    };
+  }, [eventDetails?.id, isTicketmasterEvent]);
+  
+  // Add a separate function to fetch attendees for both custom and Ticketmaster events
+  const fetchAttendees = async () => {
+    if (!eventDetails?.id) return;
+    
+    setLoadingAttendees(true);
+    try {
+      // Table name depends on event type
+      const tableName = isTicketmasterEvent ? 'ticketmaster_event_attendees' : 'event_attendees';
+      
+      // For Ticketmaster events, ensure the table exists
+      if (isTicketmasterEvent) {
+        await ensureTicketmasterTables();
+      }
+      
+      // Get attendees
+      // First, get the list of user IDs who are attending
+      const { data: attendeeRecords, error: attendeeError } = await supabase
+        .from(tableName)
+        .select('user_id')
+        .eq('event_id', eventDetails.id);
+      
+      // If we have a table error for Ticketmaster events, it might be because the table doesn't exist yet
+      // In this case, just set empty attendees and return
+      if (attendeeError) {
+        console.error('Error fetching attendee records:', attendeeError);
+        
+        // Check if the error is specifically about the table not existing
+        if (isTicketmasterEvent && attendeeError.code === '42P01') {
+          console.log('Ticketmaster attendees table does not exist yet, returning empty array');
+          setAttendees([]);
+          return;
+        }
+        
+        throw attendeeError;
+      }
+      
+      if (!attendeeRecords || attendeeRecords.length === 0) {
+        // No attendees, set empty array
+        setAttendees([]);
+      } else {
+        // Extract user IDs
+        const userIds = attendeeRecords.map(record => record.user_id);
+        
+        // Then fetch the user details for those IDs
+        const { data: attendeeData, error: userError } = await supabase
+          .from('users')
+          .select('id, name, phone_number')
+          .in('id', userIds);
+          
+        if (userError) {
+          console.error('Error fetching attendee user data:', userError);
+          throw userError;
+        }
+        
+        setAttendees(attendeeData || []);
+        
+        // Update attending status for current user
+        if (currentUser) {
+          const isAttending = userIds.includes(currentUser.id);
+          setAttending(isAttending);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching attendees:', error);
+      // Set empty array in case of error to avoid showing stale data
+      setAttendees([]);
+    } finally {
+      setLoadingAttendees(false);
+    }
+  };
+
+  // Function to invite individual contacts - prototype mode
+  const inviteContacts = async (selectedContacts) => {
+    if (!selectedContacts || selectedContacts.length === 0) {
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      // For prototype, just show success without database interactions
+      setTimeout(() => {
+        Alert.alert(
+          'Success', 
+          `Invitations sent to ${selectedContacts.length} contacts.`
+        );
+        
+        setShowInviteContactsModal(false);
+      }, 500);
+    } catch (error) {
+      console.error('Error simulating invites:', error);
+      Alert.alert('Error', 'Failed to invite contacts to this event.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (initialLoading || (loading && !eventDetails)) {
     return (
       <View style={styles.loadingContainer}>
@@ -547,7 +688,11 @@ const EventDetailsScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={true}
+        alwaysBounceVertical={true}
+      >
         <View style={styles.header}>
           <TouchableOpacity 
             style={styles.backButton}
@@ -758,6 +903,30 @@ const EventDetailsScreen = () => {
                   )}
                 </TouchableOpacity>
               )}
+              
+              {/* Show Invite buttons if user is attending */}
+              {attending && (
+                <View style={styles.inviteOptionsContainer}>
+                  <Text style={styles.invitePromptText}>Invite others to join you:</Text>
+                  <View style={styles.inviteButtonsRow}>
+                    <TouchableOpacity
+                      style={[styles.inviteOptionButton, styles.friendsButton]}
+                      onPress={() => setShowInviteContactsModal(true)}
+                    >
+                      <MaterialIcons name="person-add" size={20} color="white" />
+                      <Text style={styles.inviteOptionButtonText}>Friends</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                      style={[styles.inviteOptionButton, styles.groupsButton]}
+                      onPress={() => setShowInviteGroupModal(true)}
+                    >
+                      <MaterialIcons name="group-add" size={20} color="white" />
+                      <Text style={styles.inviteOptionButtonText}>Groups</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
             </View>
           )}
           
@@ -802,6 +971,26 @@ const EventDetailsScreen = () => {
               <Text style={styles.emptyText}>No groups invited to this event</Text>
             )}
           </View>
+          
+          {/* For Ticketmaster events, show source info instead of external link */}
+          {isTicketmasterEvent && (
+            <View style={styles.ticketmasterSourceContainer}>
+              <MaterialIcons name="event" size={20} color={COLORS.primary} />
+              <Text style={styles.ticketmasterSourceText}>
+                This event information is from Ticketmaster
+              </Text>
+            </View>
+          )}
+          
+          {/* Invite Friends Button shown only at the bottom if user is event host or not attending */}
+          {currentUser && (eventDetails.host_id === currentUser.id || !attending) && (
+            <TouchableOpacity
+              style={[styles.rsvpButton, styles.inviteButton]}
+              onPress={() => setShowInviteContactsModal(true)}
+            >
+              <Text style={styles.rsvpButtonText}>Invite Friends</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
 
@@ -833,6 +1022,9 @@ const EventDetailsScreen = () => {
                   keyExtractor={(item) => item.id.toString()}
                   renderItem={renderInviteGroupItem}
                   contentContainerStyle={styles.groupsList}
+                  scrollEnabled={true}
+                  nestedScrollEnabled={true}
+                  style={{ maxHeight: '60%', flexGrow: 0 }}
                   ListEmptyComponent={
                     <View style={styles.emptyContainer}>
                       <Text style={styles.emptyText}>
@@ -863,6 +1055,45 @@ const EventDetailsScreen = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Invite Contacts Modal */}
+      <Modal
+        visible={showInviteContactsModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowInviteContactsModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Invite Friends</Text>
+              <TouchableOpacity onPress={() => setShowInviteContactsModal(false)}>
+                <MaterialIcons name="close" size={24} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+            
+            <ScrollView contentContainerStyle={{ padding: SPACING.md }} style={{ maxHeight: '80%' }}>
+              <Text style={styles.infoText}>Select friends to invite to this event.</Text>
+              <TouchableOpacity 
+                style={[styles.inviteButton, { marginTop: SPACING.md }]}
+                onPress={() => {
+                  // This would normally pass selected contacts
+                  // For now we're just closing the modal
+                  setShowInviteContactsModal(false);
+                  navigation.navigate('ContactsScreen', { 
+                    onContactsSelected: inviteContacts,
+                    eventId: eventDetails.id,
+                    isTicketmasterEvent: isTicketmasterEvent,
+                    eventData: isTicketmasterEvent ? eventDetails : null
+                  });
+                }}
+              >
+                <Text style={styles.inviteButtonText}>Select Contacts</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -874,6 +1105,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    paddingBottom: 40, // Add extra bottom padding to ensure scrolling to the end
   },
   loadingContainer: {
     flex: 1,
@@ -1161,6 +1393,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+    padding: SPACING.md,
   },
   modalContent: {
     backgroundColor: 'white',
@@ -1189,7 +1422,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   inviteButton: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: '#6366F1', // Purple
     paddingVertical: SPACING.sm,
     paddingHorizontal: SPACING.lg,
     borderRadius: 8,
@@ -1209,6 +1442,56 @@ const styles = StyleSheet.create({
     padding: SPACING.xl,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  ticketmasterSourceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.md,
+    marginTop: SPACING.sm,
+    backgroundColor: '#f0f9ff',
+    borderRadius: LAYOUT.borderRadius,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  ticketmasterSourceText: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+    marginLeft: SPACING.sm,
+  },
+  inviteOptionsContainer: {
+    marginTop: SPACING.md,
+  },
+  invitePromptText: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginBottom: SPACING.sm,
+  },
+  inviteButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.md,
+  },
+  inviteOptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.sm,
+    borderRadius: 8,
+    flex: 0.48, // Take up almost half the width with a small gap between
+    height: 44,
+  },
+  friendsButton: {
+    backgroundColor: '#4CAF50',
+  },
+  groupsButton: {
+    backgroundColor: '#6366F1',
+  },
+  inviteOptionButtonText: {
+    color: 'white',
+    fontSize: FONT_SIZES.sm,
+    fontWeight: 'bold',
+    marginLeft: SPACING.sm,
   },
 });
 

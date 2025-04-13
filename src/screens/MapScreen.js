@@ -19,7 +19,7 @@ import {
   LogBox
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
-import { supabase } from "../services/supabaseClient";
+import { supabase, ensureTicketmasterTables } from "../services/supabaseClient";
 import { searchEvents } from "../services/eventsApiService";
 import { COLORS, SPACING, FONT_SIZES } from "../constants";
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -472,39 +472,49 @@ const MapScreen = ({ navigation }) => {
     if (!user) return;
     
     try {
-      // Get host details - improved to handle the case where the host info isn't found
-      const { data: hostData, error: hostError } = await supabase
-        .from('users')
-        .select('id, name, email, phone_number')
-        .eq('id', event.host_id)
-        .single();
-      
-      console.log('Host data fetch result:', { hostData, hostError });
-      
-      if (hostError) {
-        console.error('Error fetching host data:', hostError);
-        // Set default host info instead of throwing error
-        setHostInfo({ name: 'Unknown', id: event.host_id });
+      // Only fetch host details for internal events
+      if (!event.is_external) {
+        // Get host details - improved to handle the case where the host info isn't found
+        const { data: hostData, error: hostError } = await supabase
+          .from('users')
+          .select('id, name, email, phone_number')
+          .eq('id', event.host_id)
+          .single();
+        
+        console.log('Host data fetch result:', { hostData, hostError });
+        
+        if (hostError) {
+          console.error('Error fetching host data:', hostError);
+          // Set default host info instead of throwing error
+          setHostInfo({ name: 'Unknown', id: event.host_id });
+        } else {
+          setHostInfo(hostData || { name: 'Unknown', id: event.host_id });
+        }
       } else {
-        setHostInfo(hostData || { name: 'Unknown', id: event.host_id });
+        // For external events, set a default host
+        setHostInfo({ name: 'Ticketmaster', id: 'external' });
       }
+      
+      // Determine which table to check for attendance based on event type
+      const attendeesTable = event.is_external ? 'ticketmaster_event_attendees' : 'event_attendees';
       
       // Check if user is attending
       const { data: attendingData, error: attendingError } = await supabase
-        .from('event_attendees')
+        .from(attendeesTable)
         .select('*')
         .eq('event_id', event.id)
         .eq('user_id', user.id);
         
-      if (attendingError) throw attendingError;
-      setAttending(attendingData && attendingData.length > 0);
+      if (attendingError) {
+        console.error('Error checking attendance:', attendingError);
+      } else {
+        setAttending(attendingData && attendingData.length > 0);
+      }
       
-      // Fix for the foreign key relationship error (PGRST200):
-      // Get attendee user IDs first, then fetch user details separately
-      
+      // Get attendee list - works for both internal and external events
       // Step 1: Get attendee IDs
       const { data: attendeeRecords, error: attendeeError } = await supabase
-        .from('event_attendees')
+        .from(attendeesTable)
         .select('user_id')
         .eq('event_id', event.id);
         
@@ -548,43 +558,54 @@ const MapScreen = ({ navigation }) => {
     setLoadingAttendance(true);
     
     try {
+      // For prototype purposes, just update the UI without database interactions
       if (attending) {
-        // Remove attendance
-        const { error } = await supabase
-          .from('event_attendees')
-          .delete()
-          .eq('event_id', selectedEvent.id)
-          .eq('user_id', user.id);
-          
-        if (error) throw error;
-        
+        // Just update UI state
         setAttending(false);
         setAttendees(attendees.filter(a => a.id !== user.id));
-      } else {
-        // Add attendance
-        const { error } = await supabase
-          .from('event_attendees')
-          .insert([
-            { event_id: selectedEvent.id, user_id: user.id }
-          ]);
-          
-        if (error) throw error;
         
-        // Get user info to add to attendees list
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('id, name, phone_number')
-          .eq('id', user.id)
-          .single();
-          
-        if (userError) throw userError;
+        Alert.alert(
+          'Attendance Canceled', 
+          'You are no longer attending this event'
+        );
+      } else {
+        // Add user to local attendees list
+        const userData = {
+          id: user.id,
+          name: user.email?.split('@')[0] || 'You',
+          phone_number: null
+        };
         
         setAttending(true);
         setAttendees([...attendees, userData]);
+        
+        // Show invite dialog after registering
+        setTimeout(() => {
+          Alert.alert(
+            'Successfully Registered',
+            'Would you like to invite others to join you?',
+            [
+              {
+                text: 'Not now',
+                style: 'cancel'
+              },
+              {
+                text: 'Invite others',
+                onPress: () => {
+                  closeDrawer();
+                  navigation.navigate('EventDetails', { 
+                    event: selectedEvent, 
+                    isTicketmasterEvent: true 
+                  });
+                }
+              }
+            ]
+          );
+        }, 300);
       }
     } catch (error) {
-      console.error('Error updating attendance:', error);
-      Alert.alert('Error', 'Failed to update attendance');
+      console.error('Error updating attendance state:', error);
+      Alert.alert('Error', 'Failed to update attendance status');
     } finally {
       setLoadingAttendance(false);
     }
@@ -593,7 +614,17 @@ const MapScreen = ({ navigation }) => {
   const goToEventDetails = () => {
     if (selectedEvent) {
       closeDrawer();
-      navigation.navigate('EventDetails', { event: selectedEvent });
+      if (selectedEvent.is_external) {
+        // For external Ticketmaster events, convert the ID format and navigate
+        // The ID format is already prefixed with 'tm-' in eventsApiService.js
+        navigation.navigate('EventDetails', { 
+          event: selectedEvent, 
+          isTicketmasterEvent: true 
+        });
+      } else {
+        // For internal events
+        navigation.navigate('EventDetails', { event: selectedEvent });
+      }
     }
   };
   
@@ -768,7 +799,6 @@ const MapScreen = ({ navigation }) => {
                 </View>
                 
                 <FlatList
-                
                   data={eventsAtLocation}
                   keyExtractor={(event) => event.id.toString()}
                   renderItem={({ item: event }) => (
@@ -827,13 +857,12 @@ const MapScreen = ({ navigation }) => {
                     data={[{id: 'event-detail'}]}
                     keyExtractor={item => item.id}
                     showsVerticalScrollIndicator={true}
-                    contentContainerStyle={{
-                      paddingBottom: 40,
-                      paddingHorizontal: SPACING.md
-                    }}
-                    removeClippedSubviews={false}
+                    contentContainerStyle={styles.drawerScrollContent}
+                    style={{ flexGrow: 1, paddingHorizontal: SPACING.md }}
                     scrollEnabled={true}
+                    nestedScrollEnabled={true}
                     bounces={true}
+                    removeClippedSubviews={false}
                     renderItem={() => (
                       <>
                         {/* Event Image */}
@@ -877,13 +906,33 @@ const MapScreen = ({ navigation }) => {
                           {/* Action Buttons */}
                           <View style={styles.actionButtons}>
                             {selectedEvent.is_external ? (
-                              // External event action
-                              <TouchableOpacity
-                                style={[styles.actionButton, styles.primaryButton]}
-                                onPress={openExternalEvent}
-                              >
-                                <Text style={styles.actionButtonText}>View Event Details</Text>
-                              </TouchableOpacity>
+                              // External event actions - make similar to internal events
+                              <>
+                                {loadingAttendance ? (
+                                  <ActivityIndicator color={COLORS.primary} style={styles.attendingIndicator} />
+                                ) : (
+                                  // For external events, user can attend
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.actionButton,
+                                      attending ? styles.attendingButton : styles.primaryButton
+                                    ]}
+                                    onPress={toggleAttendance}
+                                  >
+                                    <Text style={styles.actionButtonText}>
+                                      {attending ? "Cancel Attendance" : "Attend Event"}
+                                    </Text>
+                                  </TouchableOpacity>
+                                )}
+                                
+                                {/* View Details (opens EventDetailsScreen) */}
+                                <TouchableOpacity
+                                  style={[styles.actionButton, styles.secondaryButton]}
+                                  onPress={goToEventDetails}
+                                >
+                                  <Text style={styles.actionButtonText}>View Details</Text>
+                                </TouchableOpacity>
+                              </>
                             ) : (
                               // Internal event actions
                               <>
@@ -922,41 +971,41 @@ const MapScreen = ({ navigation }) => {
                             )}
                           </View>
                           
-                          {/* Attendees section (only for internal events) */}
-                          {!selectedEvent.is_external && (
-                            <View style={styles.attendeesSection}>
-                              <Text style={styles.sectionTitle}>
-                                {attendees.length} {attendees.length === 1 ? "Person" : "People"} Attending
+                          {/* Attendees section (for all events) */}
+                          <View style={styles.attendeesSection}>
+                            <Text style={styles.sectionTitle}>
+                              {attendees.length} {attendees.length === 1 ? "Person" : "People"} Attending
+                            </Text>
+                            
+                            {/* Host info */}
+                            <View style={styles.hostInfo}>
+                              <Text style={styles.hostLabel}>Hosted by:</Text>
+                              <Text style={styles.hostName}>
+                                {selectedEvent.is_external 
+                                  ? "Ticketmaster" 
+                                  : (hostInfo?.name || (selectedEvent.host_id === user?.id ? user?.email?.split('@')[0] : "Unknown"))}
                               </Text>
-                              
-                              {/* Host info */}
-                              <View style={styles.hostInfo}>
-                                <Text style={styles.hostLabel}>Hosted by:</Text>
-                                <Text style={styles.hostName}>
-                                  {hostInfo?.name || (selectedEvent.host_id === user?.id ? user?.email?.split('@')[0] : "Unknown")}
-                                </Text>
-                              </View>
-                              
-                              {/* Attendees list (only shown to the host) */}
-                              {selectedEvent.host_id === user?.id && attendees.length > 0 && (
-                                <View style={styles.attendeesList}>
-                                  <Text style={styles.attendeesListTitle}>Attendees:</Text>
-                                  {attendees.map((attendee, index) => (
-                                    <View key={attendee.id} style={styles.attendeeItem}>
-                                      <Text style={styles.attendeeName}>
-                                        {attendee.name || attendee.email?.split('@')[0] || "Anonymous"}
-                                      </Text>
-                                      {attendee.phone_number && (
-                                        <Text style={styles.attendeePhone}>
-                                          {attendee.phone_number}
-                                        </Text>
-                                      )}
-                                    </View>
-                                  ))}
-                                </View>
-                              )}
                             </View>
-                          )}
+                            
+                            {/* Attendees list (shown to everyone for Ticketmaster events or to the host for custom events) */}
+                            {(selectedEvent.is_external || selectedEvent.host_id === user?.id) && attendees.length > 0 && (
+                              <View style={styles.attendeesList}>
+                                <Text style={styles.attendeesListTitle}>Attendees:</Text>
+                                {attendees.map((attendee, index) => (
+                                  <View key={attendee.id} style={styles.attendeeItem}>
+                                    <Text style={styles.attendeeName}>
+                                      {attendee.name || attendee.email?.split('@')[0] || "Anonymous"}
+                                    </Text>
+                                    {attendee.phone_number && (
+                                      <Text style={styles.attendeePhone}>
+                                        {attendee.phone_number}
+                                      </Text>
+                                    )}
+                                  </View>
+                                ))}
+                              </View>
+                            )}
+                          </View>
                         </View>
                       </>
                     )}
@@ -1011,7 +1060,7 @@ const styles = StyleSheet.create({
   },
   locationSelectorContainer: {
     backgroundColor: 'white',
-    height: height * 0.7,
+    height: '70%',
     width: '100%',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -1058,7 +1107,7 @@ const styles = StyleSheet.create({
   },
   drawerContainer: {
     backgroundColor: 'white',
-    height: height * 0.7,
+    height: '80%',
     width: '100%',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -1067,7 +1116,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 5,
     elevation: 10,
-    maxHeight: height * 0.8, // Ensure there's room to scroll
+    paddingBottom: 20,
   },
   drawerHandle: {
     alignItems: 'center',
@@ -1086,9 +1135,9 @@ const styles = StyleSheet.create({
     padding: SPACING.sm,
     zIndex: 10,
   },
-  drawerContent: {
-    flex: 1,
-    marginTop: SPACING.sm,
+  drawerScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 80,
   },
   eventImage: {
     width: '100%',
