@@ -33,12 +33,19 @@ ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
 -- Users can view events if:
 -- 1. They are the host
 -- 2. The event is open (is_open = true)
-CREATE POLICY "Users can view their own events and public events"
+-- 3. They are invited to the event
+CREATE POLICY "Users can view their own events, public events, and events they're invited to"
     ON public.events
     FOR SELECT
     USING (
         host_id = auth.uid() OR
-        is_open = true
+        is_open = true OR
+        EXISTS (
+            SELECT 1 FROM public.event_invitations 
+            WHERE 
+                event_invitations.event_id = events.id AND 
+                event_invitations.invitee_id = auth.uid()
+        )
     );
 
 -- Policy for inserting events (only authenticated users can create events)

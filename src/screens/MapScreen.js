@@ -614,6 +614,45 @@ const MapScreen = ({ navigation }) => {
     });
   };
 
+  // Format time for display
+  const formatTime = (timeString) => {
+    if (!timeString) return "No time specified";
+    
+    try {
+      // Handle different time formats
+      let date;
+      
+      if (typeof timeString === 'string') {
+        // Handle HH:MM:SS format
+        if (timeString.includes(':')) {
+          const [hours, minutes] = timeString.split(':').map(Number);
+          date = new Date();
+          date.setHours(hours, minutes);
+        } else {
+          // Handle ISO date string
+          date = new Date(timeString);
+        }
+      } else {
+        // Already a Date object
+        date = timeString;
+      }
+      
+      // Format the time
+      let hours = date.getHours();
+      let minutes = date.getMinutes();
+      const ampm = hours >= 12 ? "PM" : "AM";
+
+      hours = hours % 12;
+      hours = hours ? hours : 12; // the hour '0' should be '12'
+      minutes = minutes < 10 ? "0" + minutes : minutes;
+
+      return `${hours}:${minutes} ${ampm}`;
+    } catch (error) {
+      console.error('Error formatting time:', error);
+      return "Time format error";
+    }
+  };
+
   const toggleSearchBar = () => {
     setIsSearching(!isSearching);
     if (!isSearching) {
@@ -729,6 +768,7 @@ const MapScreen = ({ navigation }) => {
                 </View>
                 
                 <FlatList
+                
                   data={eventsAtLocation}
                   keyExtractor={(event) => event.id.toString()}
                   renderItem={({ item: event }) => (
@@ -786,6 +826,14 @@ const MapScreen = ({ navigation }) => {
                   <FlatList
                     data={[{id: 'event-detail'}]}
                     keyExtractor={item => item.id}
+                    showsVerticalScrollIndicator={true}
+                    contentContainerStyle={{
+                      paddingBottom: 40,
+                      paddingHorizontal: SPACING.md
+                    }}
+                    removeClippedSubviews={false}
+                    scrollEnabled={true}
+                    bounces={true}
                     renderItem={() => (
                       <>
                         {/* Event Image */}
@@ -810,6 +858,16 @@ const MapScreen = ({ navigation }) => {
                             {selectedEvent.location || 'No Location Specified'}
                           </Text>
                           <Text style={styles.eventDate}>{formatDate(selectedEvent.event_date || new Date())}</Text>
+                          
+                          {/* Add Time Display */}
+                          <View style={styles.eventTimeContainer}>
+                            <MaterialIcons name="access-time" size={18} color={COLORS.textSecondary || '#666'} />
+                            <Text style={styles.eventTime}>
+                              {selectedEvent.start_time ? 
+                                `${formatTime(selectedEvent.start_time)} - ${formatTime(selectedEvent.end_time || selectedEvent.start_time)}` : 
+                                "Time not specified"}
+                            </Text>
+                          </View>
                           
                           {/* Description */}
                           <Text style={styles.eventDescription}>
@@ -878,15 +936,30 @@ const MapScreen = ({ navigation }) => {
                                   {hostInfo?.name || (selectedEvent.host_id === user?.id ? user?.email?.split('@')[0] : "Unknown")}
                                 </Text>
                               </View>
+                              
+                              {/* Attendees list (only shown to the host) */}
+                              {selectedEvent.host_id === user?.id && attendees.length > 0 && (
+                                <View style={styles.attendeesList}>
+                                  <Text style={styles.attendeesListTitle}>Attendees:</Text>
+                                  {attendees.map((attendee, index) => (
+                                    <View key={attendee.id} style={styles.attendeeItem}>
+                                      <Text style={styles.attendeeName}>
+                                        {attendee.name || attendee.email?.split('@')[0] || "Anonymous"}
+                                      </Text>
+                                      {attendee.phone_number && (
+                                        <Text style={styles.attendeePhone}>
+                                          {attendee.phone_number}
+                                        </Text>
+                                      )}
+                                    </View>
+                                  ))}
+                                </View>
+                              )}
                             </View>
                           )}
                         </View>
                       </>
                     )}
-                    contentContainerStyle={{
-                      paddingBottom: 40,
-                      paddingHorizontal: SPACING.md
-                    }}
                   />
                 )}
               </View>
@@ -994,6 +1067,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 5,
     elevation: 10,
+    maxHeight: height * 0.8, // Ensure there's room to scroll
   },
   drawerHandle: {
     alignItems: 'center',
@@ -1049,6 +1123,16 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     color: COLORS.textSecondary || '#666',
     marginBottom: SPACING.lg,
+  },
+  eventTimeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.lg,
+  },
+  eventTime: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary || '#666',
+    marginLeft: SPACING.xs,
   },
   eventDescription: {
     fontSize: FONT_SIZES.md,
@@ -1113,6 +1197,28 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     fontWeight: 'bold',
     color: COLORS.text,
+  },
+  attendeesList: {
+    marginTop: SPACING.md,
+  },
+  attendeesListTitle: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    marginBottom: SPACING.sm,
+  },
+  attendeeItem: {
+    paddingVertical: SPACING.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  attendeeName: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+  },
+  attendeePhone: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary || '#666',
+    marginTop: 2,
   },
   loadingContainer: {
     flex: 1,

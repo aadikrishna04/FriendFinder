@@ -70,7 +70,7 @@ const Header = ({ location, eventsCount, onLocationPress, profile, onRadiusChang
 
   const navigateToProfileScreen = () => {
     setShowProfileModal(false);
-    navigation.navigate('ProfileScreen');
+    navigation.navigate('Profile');
   };
 
   const renderSearchBar = () => (
@@ -272,6 +272,11 @@ const styles = StyleSheet.create({
     width: '100%',
     zIndex: 5,
     paddingBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
   },
   header: {
     paddingTop: 15,

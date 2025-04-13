@@ -75,4 +75,183 @@ export const searchEvents = async (keyword, latitude, longitude, radius = 25, si
     console.error('Error fetching events from Ticketmaster:', error);
     return []; // Return empty array instead of throwing to prevent app crashes
   }
+};
+
+/**
+ * Invite a user to an event
+ * @param {string} eventId - The ID of the event
+ * @param {string} inviteeId - The ID of the user to invite
+ * @returns {Promise<object>} - The created invitation
+ */
+export const inviteUserToEvent = async (eventId, inviteeId) => {
+  try {
+    // Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError) throw userError;
+    if (!user) throw new Error('You must be logged in to send invitations');
+    
+    // Check if the user has permission to invite to this event
+    const { data: eventData, error: eventError } = await supabase
+      .from('events')
+      .select('host_id, title')
+      .eq('id', eventId)
+      .single();
+      
+    if (eventError) throw eventError;
+    if (!eventData) throw new Error('Event not found');
+    
+    // Only the event host can send invitations
+    if (eventData.host_id !== user.id) {
+      throw new Error('Only the event host can send invitations');
+    }
+    
+    // Check if invitation already exists
+    const { data: existingInvitation, error: checkError } = await supabase
+      .from('event_invitations')
+      .select('id, status')
+      .eq('event_id', eventId)
+      .eq('invitee_id', inviteeId)
+      .single();
+      
+    if (checkError && checkError.code !== 'PGRST116') throw checkError;
+    
+    // If invitation exists, return it
+    if (existingInvitation) {
+      return {
+        ...existingInvitation,
+        already_invited: true
+      };
+    }
+    
+    // Create the invitation
+    const { data: invitation, error: inviteError } = await supabase
+      .from('event_invitations')
+      .insert({
+        event_id: eventId,
+        inviter_id: user.id,
+        invitee_id: inviteeId,
+        status: 'pending'
+      })
+      .select()
+      .single();
+      
+    if (inviteError) throw inviteError;
+    
+    return {
+      ...invitation,
+      already_invited: false,
+      event_title: eventData.title
+    };
+  } catch (error) {
+    console.error('Error inviting user to event:', error);
+    throw error;
+  }
+};
+
+/**
+ * Respond to an event invitation
+ * @param {string} invitationId - The ID of the invitation
+ * @param {string} status - The response status ('accepted' or 'declined')
+ * @returns {Promise<object>} - The updated invitation
+ */
+export const respondToEventInvitation = async (invitationId, status) => {
+  try {
+    if (!['accepted', 'declined'].includes(status)) {
+      throw new Error('Invalid status. Must be "accepted" or "declined"');
+    }
+    
+    // Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError) throw userError;
+    if (!user) throw new Error('You must be logged in to respond to invitations');
+    
+    // Get the invitation
+    const { data: invitation, error: invitationError } = await supabase
+      .from('event_invitations')
+      .select('id, event_id, invitee_id, status')
+      .eq('id', invitationId)
+      .single();
+      
+    if (invitationError) throw invitationError;
+    if (!invitation) throw new Error('Invitation not found');
+    
+    // Check if the current user is the invitee
+    if (invitation.invitee_id !== user.id) {
+      throw new Error('You can only respond to your own invitations');
+    }
+    
+    // Update the invitation status
+    const { data: updatedInvitation, error: updateError } = await supabase
+      .from('event_invitations')
+      .update({ status })
+      .eq('id', invitationId)
+      .select()
+      .single();
+      
+    if (updateError) throw updateError;
+    
+    // If accepted, also add to event_attendees
+    if (status === 'accepted') {
+      const { error: attendeeError } = await supabase
+        .from('event_attendees')
+        .upsert({
+          event_id: invitation.event_id,
+          user_id: user.id
+        });
+        
+      if (attendeeError) {
+        console.error('Error adding to event attendees:', attendeeError);
+        // Continue anyway, as the invitation was updated successfully
+      }
+    }
+    
+    return updatedInvitation;
+  } catch (error) {
+    console.error('Error responding to event invitation:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get event invitations for the current user
+ * @param {string} status - Optional status filter ('pending', 'accepted', 'declined')
+ * @returns {Promise<array>} - The invitations
+ */
+export const getEventInvitations = async (status = null) => {
+  try {
+    // Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError) throw userError;
+    if (!user) throw new Error('You must be logged in to view invitations');
+    
+    // Build the query
+    let query = supabase
+      .from('event_invitations')
+      .select(`
+        id, status, created_at, updated_at,
+        events:event_id(id, title, description, location, event_date, image_url),
+        inviters:inviter_id(id, name, email)
+      `)
+      .eq('invitee_id', user.id);
+      
+    // Apply status filter if provided
+    if (status) {
+      query = query.eq('status', status);
+    }
+    
+    // Order by most recent first
+    query = query.order('created_at', { ascending: false });
+    
+    const { data, error } = await query;
+    
+    if (error) throw error;
+    
+    return data;
+  } catch (error) {
+    console.error('Error getting event invitations:', error);
+    throw error;
+  }
 }; 

@@ -19,17 +19,83 @@ import MapView, { Marker } from 'react-native-maps';
 const EventDetailsScreen = () => {
   const navigation = useNavigation();
   const route = useRoute();
-  const { event } = route.params;
+  // Get either the full event object or just the eventId
+  const eventParam = route.params?.event;
   
-  const [eventDetails, setEventDetails] = useState(event);
+  // Ensure eventId is a string - route params might give us different types
+  let eventId = route.params?.eventId;
+  if (!eventId && eventParam) {
+    eventId = eventParam.id;
+  }
+  
+  if (eventId && typeof eventId !== 'string') {
+    eventId = String(eventId); // Convert to string if it's not already
+  }
+  
+  const [eventDetails, setEventDetails] = useState(eventParam);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(!eventParam);
   const [hostInfo, setHostInfo] = useState(null);
   const [attending, setAttending] = useState(false);
   const [attendees, setAttendees] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [loadingAttendees, setLoadingAttendees] = useState(true);
+  const [invitation, setInvitation] = useState(null);
+  const [loadingInvitation, setLoadingInvitation] = useState(false);
+
+  // First, fetch the event if we only have the ID
+  useEffect(() => {
+    const fetchEvent = async () => {
+      if (eventParam) return; // Skip if we already have the event object
+      if (!eventId) {
+        Alert.alert('Error', 'No event ID provided');
+        navigation.goBack();
+        return;
+      }
+      
+      setInitialLoading(true);
+      console.log(`Attempting to fetch event with ID: ${eventId}`);
+      
+      try {
+        // Log the type of the eventId to ensure it's correct
+        console.log(`Event ID type: ${typeof eventId}`);
+        
+        // Fetch the event by ID
+        const { data, error } = await supabase
+          .from('events')
+          .select('*')
+          .eq('id', eventId)
+          .single();
+        
+        console.log('Query response:', { data, error });
+          
+        if (error) throw error;
+        
+        if (!data) {
+          console.log('No event found with ID:', eventId);
+          Alert.alert('Error', 'Event not found');
+          navigation.goBack();
+          return;
+        }
+        
+        console.log('Event found:', data.title);
+        setEventDetails(data);
+      } catch (error) {
+        console.error('Error fetching event by ID:', error);
+        Alert.alert('Error', 'Failed to load event details');
+        navigation.goBack();
+      } finally {
+        setInitialLoading(false);
+      }
+    };
+    
+    fetchEvent();
+  }, [eventId, eventParam, navigation]);
 
   useEffect(() => {
+    // Skip if we don't have event details yet
+    if (!eventDetails) return;
+    
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       setCurrentUser(user);
@@ -45,7 +111,7 @@ const EventDetailsScreen = () => {
         const { data: hostData, error: hostError } = await supabase
           .from('users')
           .select('name, phone_number')
-          .eq('id', event.host_id)
+          .eq('id', eventDetails.host_id)
           .single();
           
         if (hostError) throw hostError;
@@ -55,33 +121,44 @@ const EventDetailsScreen = () => {
         const { data: attendingData, error: attendingError } = await supabase
           .from('event_attendees')
           .select('*')
-          .eq('event_id', event.id)
+          .eq('event_id', eventDetails.id)
           .eq('user_id', user.id);
           
         if (attendingError) throw attendingError;
         setAttending(attendingData && attendingData.length > 0);
         
         // Get attendees
-        const { data: attendeesData, error: attendeesError } = await supabase
+        // First, get the list of user IDs who are attending
+        const { data: attendeeRecords, error: attendeeError } = await supabase
           .from('event_attendees')
-          .select(`
-            user_id,
-            users (
-              id,
-              name,
-              phone_number
-            )
-          `)
-          .eq('event_id', event.id);
+          .select('user_id')
+          .eq('event_id', eventDetails.id);
           
-        if (attendeesError) {
-          console.error('Error fetching event attendees:', attendeesError);
-          throw attendeesError;
+        if (attendeeError) {
+          console.error('Error fetching attendee records:', attendeeError);
+          throw attendeeError;
         }
         
-        // Extract user info from nested response
-        const formattedAttendees = attendeesData.map(item => item.users);
-        setAttendees(formattedAttendees);
+        if (!attendeeRecords || attendeeRecords.length === 0) {
+          // No attendees, set empty array
+          setAttendees([]);
+        } else {
+          // Extract user IDs
+          const userIds = attendeeRecords.map(record => record.user_id);
+          
+          // Then fetch the user details for those IDs
+          const { data: attendeeData, error: userError } = await supabase
+            .from('users')
+            .select('id, name, phone_number')
+            .in('id', userIds);
+            
+          if (userError) {
+            console.error('Error fetching attendee user data:', userError);
+            throw userError;
+          }
+          
+          setAttendees(attendeeData || []);
+        }
       } catch (error) {
         console.error('Error fetching event details:', error);
         Alert.alert('Error', 'Failed to load event details');
@@ -92,7 +169,37 @@ const EventDetailsScreen = () => {
     };
     
     fetchEventDetails();
-  }, [event.id, event.host_id]);
+  }, [eventDetails]); // Only depend on eventDetails object, not specific fields
+
+  useEffect(() => {
+    // Skip if we don't have event details yet
+    if (!eventDetails || !currentUser) return;
+    
+    // Check if user was invited to this event
+    const checkInvitation = async () => {
+      setLoadingInvitation(true);
+      try {
+        const { data, error } = await supabase
+          .from('event_invitations')
+          .select('*')
+          .eq('event_id', eventDetails.id)
+          .eq('invitee_id', currentUser.id)
+          .single();
+          
+        if (error && error.code !== 'PGRST116') {
+          console.error('Error checking invitation:', error);
+        }
+        
+        setInvitation(data || null);
+      } catch (error) {
+        console.error('Error checking invitation status:', error);
+      } finally {
+        setLoadingInvitation(false);
+      }
+    };
+    
+    checkInvitation();
+  }, [eventDetails, currentUser]);
 
   const toggleAttendance = async () => {
     if (!currentUser) {
@@ -108,7 +215,7 @@ const EventDetailsScreen = () => {
         const { error } = await supabase
           .from('event_attendees')
           .delete()
-          .eq('event_id', event.id)
+          .eq('event_id', eventDetails.id)
           .eq('user_id', currentUser.id);
           
         if (error) throw error;
@@ -120,7 +227,7 @@ const EventDetailsScreen = () => {
         const { error } = await supabase
           .from('event_attendees')
           .insert([
-            { event_id: event.id, user_id: currentUser.id }
+            { event_id: eventDetails.id, user_id: currentUser.id }
           ]);
           
         if (error) throw error;
@@ -150,6 +257,41 @@ const EventDetailsScreen = () => {
     }
   };
 
+  const handleInvitationResponse = async (status) => {
+    if (!invitation) return;
+    
+    setLoading(true);
+    try {
+      // Update the invitation status
+      const { error } = await supabase
+        .from('event_invitations')
+        .update({ status })
+        .eq('id', invitation.id);
+        
+      if (error) throw error;
+      
+      // If accepting, also add to attendees
+      if (status === 'accepted' && !attending) {
+        await toggleAttendance();
+      } else if (status === 'declined' && attending) {
+        await toggleAttendance();
+      }
+      
+      // Update local state
+      setInvitation({ ...invitation, status });
+      
+      Alert.alert(
+        'Success',
+        `You have ${status} the invitation.`
+      );
+    } catch (error) {
+      console.error('Error responding to invitation:', error);
+      Alert.alert('Error', 'Failed to respond to invitation');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', { 
@@ -162,11 +304,27 @@ const EventDetailsScreen = () => {
     });
   };
 
-  if (loading && !eventDetails) {
+  if (initialLoading || (loading && !eventDetails)) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={COLORS.primary} />
         <Text style={styles.loadingText}>Loading event details...</Text>
+      </View>
+    );
+  }
+  
+  // If we somehow got here without event details, show an error
+  if (!eventDetails) {
+    return (
+      <View style={styles.loadingContainer}>
+        <MaterialIcons name="error" size={48} color={COLORS.danger} />
+        <Text style={styles.errorText}>Could not load event details</Text>
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>Go Back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -301,24 +459,90 @@ const EventDetailsScreen = () => {
             )}
           </View>
           
-          {/* Show RSVP button at the bottom, but not for hosts */}
+          {/* Attendance/Invitation Response Buttons */}
           {currentUser && eventDetails.host_id !== currentUser.id && (
-            <TouchableOpacity
-              style={[
-                styles.rsvpButton,
-                attending ? styles.cancelButton : styles.attendButton
-              ]}
-              onPress={toggleAttendance}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="white" size="small" />
+            <View>
+              {/* Show invitation response buttons if user is invited */}
+              {invitation && invitation.status === 'pending' ? (
+                <View style={styles.invitationButtons}>
+                  <TouchableOpacity
+                    style={[styles.invitationButton, styles.acceptButton]}
+                    onPress={() => handleInvitationResponse('accepted')}
+                    disabled={loading || loadingInvitation}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="white" size="small" />
+                    ) : (
+                      <Text style={styles.invitationButtonText}>Accept</Text>
+                    )}
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.invitationButton, styles.declineButton]}
+                    onPress={() => handleInvitationResponse('declined')}
+                    disabled={loading || loadingInvitation}
+                  >
+                    <Text style={styles.invitationButtonText}>Decline</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : invitation && invitation.status === 'accepted' ? (
+                <View style={styles.responseStatusContainer}>
+                  <Text style={styles.responseStatusText}>
+                    You accepted this invitation
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.rsvpButton, styles.cancelButton]}
+                    onPress={toggleAttendance}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="white" size="small" />
+                    ) : (
+                      <Text style={styles.rsvpButtonText}>
+                        Cancel Attendance
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              ) : invitation && invitation.status === 'declined' ? (
+                <View style={styles.responseStatusContainer}>
+                  <Text style={styles.responseStatusText}>
+                    You declined this invitation
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.rsvpButton, styles.attendButton]}
+                    onPress={() => handleInvitationResponse('accepted')}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="white" size="small" />
+                    ) : (
+                      <Text style={styles.rsvpButtonText}>
+                        Attend Event
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               ) : (
-                <Text style={styles.rsvpButtonText}>
-                  {attending ? 'Cancel Attendance' : 'Attend Event'}
-                </Text>
+                /* Regular RSVP button for non-invited users */
+                <TouchableOpacity
+                  style={[
+                    styles.rsvpButton,
+                    attending ? styles.cancelButton : styles.attendButton
+                  ]}
+                  onPress={toggleAttendance}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="white" size="small" />
+                  ) : (
+                    <Text style={styles.rsvpButtonText}>
+                      {attending ? 'Cancel Attendance' : 'Attend Event'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
               )}
-            </TouchableOpacity>
+            </View>
           )}
           
           {/* For hosts, show an edit button at the bottom */}
@@ -504,6 +728,50 @@ const styles = StyleSheet.create({
   },
   hostButton: {
     backgroundColor: '#60A5FA',
+  },
+  errorText: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+  },
+  backButtonText: {
+    color: COLORS.primary,
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+  },
+  invitationButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: SPACING.sm,
+  },
+  invitationButton: {
+    flex: 1,
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: LAYOUT.borderRadius,
+    marginRight: SPACING.sm,
+  },
+  acceptButton: {
+    backgroundColor: '#4CAF50',
+  },
+  declineButton: {
+    backgroundColor: '#F44336',
+  },
+  invitationButtonText: {
+    color: 'white',
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+  },
+  responseStatusContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: SPACING.sm,
+  },
+  responseStatusText: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
   },
 });
 

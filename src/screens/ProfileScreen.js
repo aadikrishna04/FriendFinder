@@ -2,65 +2,125 @@ import React, { useState, useEffect } from 'react';
 import { 
   View, 
   Text, 
-  TouchableOpacity, 
   StyleSheet, 
   SafeAreaView, 
-  FlatList, 
+  TouchableOpacity,
+  Image,
+  ActivityIndicator,
   Alert,
-  ActivityIndicator
+  FlatList,
+  ScrollView,
+  SectionList,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard
 } from 'react-native';
 import * as Contacts from 'expo-contacts';
-import { signOut } from '../services/authService';
 import { supabase } from '../services/supabaseClient';
 import { COLORS, SPACING, FONT_SIZES } from '../constants';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { checkInvitationStatus } from '../services/authService';
 
-const HomeScreen = ({ navigation }) => {
-  const [hasContactsPermission, setHasContactsPermission] = useState(false);
-  const [contacts, setContacts] = useState([]);
-  const [enrolledContacts, setEnrolledContacts] = useState([]);
-  const [notEnrolledContacts, setNotEnrolledContacts] = useState([]);
-  const [loading, setLoading] = useState(false);
+const ProfileScreen = ({ navigation }) => {
+  const [user, setUser] = useState(null);
+  const [profileData, setProfileData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [showContacts, setShowContacts] = useState(false);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+  const [contacts, setContacts] = useState([]);
+  const [registeredContacts, setRegisteredContacts] = useState([]);
+  const [unregisteredContacts, setUnregisteredContacts] = useState([]);
+  const [invitedContacts, setInvitedContacts] = useState([]);
+  const [stats, setStats] = useState({
+    eventsHosted: 0,
+    eventsAttended: 0
+  });
 
   useEffect(() => {
-    // Check if we already have contacts permission
-    (async () => {
-      const { status } = await Contacts.getPermissionsAsync();
-      setHasContactsPermission(status === 'granted');
-    })();
+    fetchUserProfileData();
   }, []);
 
-  const requestContactsPermission = async () => {
+  const fetchUserProfileData = async () => {
     try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      setHasContactsPermission(status === 'granted');
+      setLoading(true);
       
-      if (status === 'granted') {
-        // Proceed directly to loading contacts without showing an alert
-        loadContacts();
-      } else {
-        // Only show an alert if permission was denied
-        Alert.alert(
-          'Contacts Access Denied',
-          'FriendFinder needs access to your contacts to show you which friends are using the app.',
-          [{ text: 'OK' }]
-        );
+      // Get current user
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError) throw userError;
+      if (!user) {
+        // Not authenticated, redirect to signin
+        navigation.replace('SignIn');
+        return;
       }
+      
+      setUser(user);
+      
+      // Get profile data
+      const { data: profileData, error: profileError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+        
+      if (profileError) throw profileError;
+      setProfileData(profileData);
+
+      // Get events hosted count
+      const { data: hostedEvents, error: hostedError } = await supabase
+        .from('events')
+        .select('id', { count: 'exact' })
+        .eq('host_id', user.id);
+        
+      if (hostedError) throw hostedError;
+      
+      // Get events attended count
+      const { data: attendedEvents, error: attendedError } = await supabase
+        .from('event_attendees')
+        .select('event_id', { count: 'exact' })
+        .eq('user_id', user.id);
+        
+      if (attendedError) throw attendedError;
+      
+      setStats({
+        eventsHosted: hostedEvents?.length || 0,
+        eventsAttended: attendedEvents?.length || 0
+      });
+
+      // Get invited contacts
+      const { data: invitations, error: invitationsError } = await supabase
+        .from('invitations')
+        .select('*')
+        .eq('inviter_id', user.id);
+
+      if (!invitationsError && invitations) {
+        setInvitedContacts(invitations);
+      }
+      
     } catch (error) {
-      console.error('Error requesting contacts permission:', error);
-      Alert.alert('Error', 'Failed to request contacts permission');
+      console.error('Error fetching profile data:', error);
+      Alert.alert('Error', 'Failed to load profile data');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const loadContacts = async () => {
-    if (!hasContactsPermission) {
-      await requestContactsPermission();
-      return;
-    }
-
-    setLoading(true);
+  const fetchContacts = async () => {
     try {
-      // Get contacts from device
+      setLoadingContacts(true);
+      setShowContacts(true);
+      
+      // Request permissions first
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Cannot access contacts');
+        setLoadingContacts(false);
+        return;
+      }
+      
+      // Get contacts
       const { data } = await Contacts.getContactsAsync({
         fields: [
           Contacts.Fields.PhoneNumbers,
@@ -72,121 +132,138 @@ const HomeScreen = ({ navigation }) => {
       
       setContacts(data);
       
-      // Filter out contacts without phone numbers
+      // Filter contacts with phone numbers
       const contactsWithPhones = data.filter(
         contact => contact.phoneNumbers && contact.phoneNumbers.length > 0
       );
       
-      // Prepare phone numbers for checking against database
-      const phoneNumbersToCheck = contactsWithPhones.flatMap(contact => 
-        contact.phoneNumbers.map(phone => {
-          // Standardize phone number to just digits
-          const standardizedNumber = phone.number.replace(/\D/g, '');
-          return {
-            contactId: contact.id,
-            phoneNumber: standardizedNumber,
-            originalPhone: phone.number,
-            contact: contact
-          };
-        })
+      // Standardize phone numbers
+      const phoneNumbers = contactsWithPhones.flatMap(contact => 
+        contact.phoneNumbers.map(phone => ({
+          contactId: contact.id,
+          standardizedNumber: phone.number.replace(/\D/g, ''),
+          contact
+        }))
       );
       
-      // Check which phone numbers exist in database
-      const { data: matchedUsers, error } = await supabase
+      // Check which contacts are registered
+      const standardizedNumbers = phoneNumbers.map(p => p.standardizedNumber);
+      const { data: registeredUsers, error } = await supabase
         .from('users')
-        .select('phone_number, name, id')
-        .in('phone_number', phoneNumbersToCheck.map(p => p.phoneNumber));
+        .select('phone_number, name, id, email')
+        .in('phone_number', standardizedNumbers);
       
-      if (error) {
-        console.error('Error checking phone numbers:', error);
-        throw error;
+      if (error) throw error;
+
+      // Get invitations to check already invited contacts
+      const { data: invitations } = await supabase
+        .from('invitations')
+        .select('invited_phone, status, created_at')
+        .eq('inviter_id', user.id);
+      
+      const invitedPhones = new Map();
+      if (invitations) {
+        invitations.forEach(inv => {
+          invitedPhones.set(inv.invited_phone, {
+            status: inv.status,
+            invitedAt: inv.created_at
+          });
+        });
       }
       
-      // Create sets of enrolled phone numbers for faster lookup
-      const enrolledPhoneNumbers = new Set(
-        matchedUsers.map(user => user.phone_number)
-      );
+      // Create lookup map of registered numbers
+      const registeredNumbersMap = new Map();
+      registeredUsers.forEach(user => {
+        registeredNumbersMap.set(user.phone_number, user);
+      });
       
-      // Divide contacts into enrolled and not enrolled
-      const enrolled = [];
-      const notEnrolled = [];
+      // Divide contacts into registered and unregistered
+      const registered = [];
+      const unregistered = [];
+      const processedIds = new Set();
       
-      // Track processed contacts to avoid duplicates
-      const processedContactIds = new Set();
-      
-      phoneNumbersToCheck.forEach(({ contactId, phoneNumber, contact }) => {
-        // Skip if we've already processed this contact
-        if (processedContactIds.has(contactId)) return;
+      phoneNumbers.forEach(({ contactId, standardizedNumber, contact }) => {
+        if (processedIds.has(contactId)) return;
         
-        if (enrolledPhoneNumbers.has(phoneNumber)) {
-          // Find the matched user data
-          const matchedUser = matchedUsers.find(user => user.phone_number === phoneNumber);
-          enrolled.push({
+        if (registeredNumbersMap.has(standardizedNumber)) {
+          const appUser = registeredNumbersMap.get(standardizedNumber);
+          registered.push({
             ...contact,
-            isEnrolled: true,
-            appUserId: matchedUser.id,
-            appUserName: matchedUser.name
+            appUserId: appUser.id,
+            appUserName: appUser.name,
+            appUserEmail: appUser.email
           });
-          processedContactIds.add(contactId);
-        } else if (!processedContactIds.has(contactId)) {
-          notEnrolled.push({
+          processedIds.add(contactId);
+        } else {
+          // Check if this contact was already invited
+          const isInvited = invitedPhones.has(standardizedNumber);
+          const invitationData = isInvited ? invitedPhones.get(standardizedNumber) : null;
+          
+          unregistered.push({
             ...contact,
-            isEnrolled: false
+            isInvited,
+            invitationStatus: invitationData?.status || null,
+            invitedAt: invitationData?.invitedAt || null
           });
-          processedContactIds.add(contactId);
+          processedIds.add(contactId);
         }
       });
       
-      setEnrolledContacts(enrolled);
-      setNotEnrolledContacts(notEnrolled);
+      setRegisteredContacts(registered);
+      setUnregisteredContacts(unregistered);
+      
     } catch (error) {
-      console.error('Error loading contacts:', error);
+      console.error('Error fetching contacts:', error);
       Alert.alert('Error', 'Failed to load contacts');
     } finally {
-      setLoading(false);
-      setShowContacts(true);
+      setLoadingContacts(false);
     }
   };
 
-  const handleSignOut = async () => {
+  const handleInvite = async (contact) => {
     try {
-      await signOut();
-      // No need to navigate - the auth state listener in App.tsx will handle this
-    } catch (error) {
-      console.error('Error signing out:', error);
-    }
-  };
-  
-  const handleViewContacts = async () => {
-    // Check current permission status first
-    if (!hasContactsPermission) {
-      // Check if we need to request or if we already have permissions
-      const { status } = await Contacts.getPermissionsAsync();
+      // Check if contact is already invited
+      const phoneNumber = contact.phoneNumbers[0]?.number;
+      if (!phoneNumber) {
+        Alert.alert('Error', 'This contact does not have a phone number');
+        return;
+      }
       
-      if (status === 'granted') {
-        // We already have permissions, just set the state
-        setHasContactsPermission(true);
-        if (contacts.length === 0) {
-          loadContacts();
-        } else {
-          setShowContacts(true);
-        }
-      } else {
-        // We need to request permissions
-        requestContactsPermission();
+      const isInvited = await checkInvitationStatus(phoneNumber);
+      
+      if (isInvited) {
+        Alert.alert(
+          'Already Invited',
+          `${contact.name} has already been invited to join FriendFinder.`
+        );
+        return;
       }
-    } else {
-      // We already know we have permissions
-      if (contacts.length === 0) {
-        loadContacts();
-      } else {
-        setShowContacts(true);
-      }
+      
+      // Show alert instead of navigating to InviteContactScreen
+      Alert.alert(
+        'Invite Contact',
+        `Would you like to invite ${contact.name} to join FriendFinder?`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Invite',
+            onPress: () => {
+              Alert.alert(
+                'Invitation Sent',
+                `An invitation has been sent to ${contact.name || 'your contact'}`,
+                [{ text: 'OK' }]
+              );
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error checking invitation status:', error);
+      Alert.alert('Error', 'Failed to check invitation status');
     }
-  };
-  
-  const handleBackToHome = () => {
-    setShowContacts(false);
   };
 
   const renderContactItem = ({ item }) => {
@@ -194,23 +271,38 @@ const HomeScreen = ({ navigation }) => {
     const phoneNumber = item.phoneNumbers && item.phoneNumbers.length > 0
       ? item.phoneNumbers[0].number
       : 'No Phone';
-      
+    
+    // Check if this is a registered contact
+    const isRegistered = 'appUserId' in item;
+    
     return (
       <View style={styles.contactItem}>
         <View style={styles.contactInfo}>
           <Text style={styles.contactName}>{contactName}</Text>
           <Text style={styles.contactPhone}>{phoneNumber}</Text>
-          {item.isEnrolled && (
-            <Text style={styles.enrolledBadge}>FriendFinder User</Text>
+          {isRegistered && (
+            <Text style={styles.registeredBadge}>FriendFinder User</Text>
+          )}
+          {!isRegistered && item.isInvited && (
+            <Text style={styles.invitedBadge}>
+              Invited • {new Date(item.invitedAt).toLocaleDateString()}
+            </Text>
           )}
         </View>
         
-        {item.isEnrolled ? (
+        {isRegistered ? (
           <TouchableOpacity
-            style={styles.viewButton}
+            style={styles.viewProfileButton}
             onPress={() => navigation.navigate('UserProfile', { userId: item.appUserId })}
           >
-            <Text style={styles.viewButtonText}>View Profile</Text>
+            <Text style={styles.viewProfileButtonText}>View Profile</Text>
+          </TouchableOpacity>
+        ) : item.isInvited ? (
+          <TouchableOpacity
+            style={[styles.inviteButton, styles.invitedButton]}
+            disabled={true}
+          >
+            <Text style={styles.inviteButtonText}>Invited</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -224,111 +316,141 @@ const HomeScreen = ({ navigation }) => {
     );
   };
 
-  const handleInvite = (contact) => {
-    // Here you would implement the invite functionality
-    // This could be sending an SMS or email invitation
-    Alert.alert(
-      'Invite Sent',
-      `An invitation has been sent to ${contact.name || 'your contact'}`,
-      [{ text: 'OK' }]
-    );
-  };
-
-  // Render the main home screen
-  const renderHomeScreen = () => (
-    <>
-      <View style={styles.welcomeContainer}>
-        <Text style={styles.welcomeTitle}>Welcome to FriendFinder</Text>
-        <Text style={styles.welcomeText}>
-          Find your friends and connect with them easily.
-        </Text>
-        
-        <TouchableOpacity 
-          style={styles.contactsButton}
-          onPress={handleViewContacts}
-        >
-          <Text style={styles.contactsButtonText}>View My Contacts</Text>
-        </TouchableOpacity>
-      </View>
-    </>
-  );
-
-  // Render the contacts screen
-  const renderContactsScreen = () => (
-    <>
-      <View style={styles.headerWithBack}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={handleBackToHome}
-        >
-          <Text style={styles.backButtonText}>← Back</Text>
+  const renderContactsList = () => (
+    <View style={styles.contactsContainer}>
+      <View style={styles.contactsHeader}>
+        <TouchableOpacity style={styles.backButton} onPress={() => setShowContacts(false)}>
+          <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
         </TouchableOpacity>
         <Text style={styles.contactsTitle}>My Contacts</Text>
       </View>
       
-      <View style={styles.contactsContent}>
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-            <Text style={styles.loadingText}>Loading contacts...</Text>
-          </View>
+      {loadingContacts ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Loading contacts...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={[
+            { title: 'FriendFinder Users', data: registeredContacts, emptyText: 'No registered contacts found' },
+            { title: 'Other Contacts', data: unregisteredContacts, emptyText: 'No contacts to invite' }
+          ]}
+          keyExtractor={(item, index) => `section-${index}`}
+          renderItem={({ item, index }) => (
+            <View style={styles.sectionContainer}>
+              <Text style={styles.sectionTitle}>{item.title} ({item.data.length})</Text>
+              {item.data.length > 0 ? (
+                item.data.map((contact, idx) => (
+                  <View key={`contact-${index}-${idx}`}>
+                    {renderContactItem({ item: contact })}
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.emptyListText}>{item.emptyText}</Text>
+              )}
+            </View>
+          )}
+        />
+      )}
+    </View>
+  );
+
+  const renderProfile = () => (
+    <ScrollView style={styles.profileContainer}>
+      {/* Profile Image */}
+      <View style={styles.profileImageContainer}>
+        {profileData?.avatar_url ? (
+          <Image 
+            source={{ uri: profileData.avatar_url }} 
+            style={styles.profileImage} 
+          />
         ) : (
-          <View style={styles.contactsContainer}>
-            <Text style={styles.sectionTitle}>
-              Your Contacts ({enrolledContacts.length + notEnrolledContacts.length})
+          <View style={styles.profileImagePlaceholder}>
+            <Text style={styles.profileInitial}>
+              {profileData?.name ? profileData.name.charAt(0).toUpperCase() : 
+               user?.email ? user.email.charAt(0).toUpperCase() : '?'}
             </Text>
-            
-            {enrolledContacts.length > 0 && (
-              <>
-                <Text style={styles.sectionSubtitle}>
-                  FriendFinder Users ({enrolledContacts.length})
-                </Text>
-                <FlatList
-                  data={enrolledContacts}
-                  renderItem={renderContactItem}
-                  keyExtractor={item => `enrolled-${item.id}`}
-                  style={styles.list}
-                />
-              </>
-            )}
-            
-            {notEnrolledContacts.length > 0 && (
-              <>
-                <Text style={styles.sectionSubtitle}>
-                  Invite to FriendFinder ({notEnrolledContacts.length})
-                </Text>
-                <FlatList
-                  data={notEnrolledContacts}
-                  renderItem={renderContactItem}
-                  keyExtractor={item => `not-enrolled-${item.id}`}
-                  style={styles.list}
-                />
-              </>
-            )}
           </View>
         )}
       </View>
-    </>
+      
+      {/* User Info */}
+      <View style={styles.userInfoContainer}>
+        <Text style={styles.userName}>
+          {profileData?.name || user?.email?.split('@')[0] || 'User'}
+        </Text>
+        <Text style={styles.userEmail}>{user?.email || 'No email'}</Text>
+        <Text style={styles.userPhone}>
+          {profileData?.phone_number || 'No phone number'}
+        </Text>
+      </View>
+      
+      {/* Stats */}
+      <View style={styles.statsContainer}>
+        <View style={styles.statItem}>
+          <Text style={styles.statValue}>{stats.eventsHosted}</Text>
+          <Text style={styles.statLabel}>Events Hosted</Text>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <Text style={styles.statValue}>{stats.eventsAttended}</Text>
+          <Text style={styles.statLabel}>Events Attended</Text>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <Text style={styles.statValue}>{invitedContacts.length}</Text>
+          <Text style={styles.statLabel}>Friends Invited</Text>
+        </View>
+      </View>
+      
+      {/* Actions */}
+      <View style={styles.actionsContainer}>
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={fetchContacts}
+        >
+          <MaterialIcons name="people" size={24} color="white" />
+          <Text style={styles.actionButtonText}>View My Contacts</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={[styles.actionButton, styles.secondaryButton]}
+          onPress={() => navigation.navigate('EditEvent')}
+        >
+          <MaterialIcons name="edit" size={24} color="white" />
+          <Text style={styles.actionButtonText}>Edit Profile</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={[styles.actionButton, styles.dangerButton]}
+          onPress={async () => {
+            try {
+              await supabase.auth.signOut();
+            } catch (error) {
+              console.error('Error signing out:', error);
+            }
+          }}
+        >
+          <MaterialIcons name="logout" size={24} color="white" />
+          <Text style={styles.actionButtonText}>Sign Out</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
   );
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>FriendFinder</Text>
-      </View>
-      
-      <View style={styles.content}>
-        {showContacts ? renderContactsScreen() : renderHomeScreen()}
-      </View>
-      
-      <View style={styles.footer}>
-        <TouchableOpacity 
-          style={styles.signOutButton}
-          onPress={handleSignOut}
-        >
-          <Text style={styles.signOutButtonText}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Loading profile...</Text>
+        </View>
+      ) : showContacts ? (
+        renderContactsList()
+      ) : (
+        renderProfile()
+      )}
     </SafeAreaView>
   );
 };
@@ -338,165 +460,246 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background || '#FFFFFF',
   },
-  header: {
-    padding: SPACING.md || 20,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border || '#E5E5E5',
-  },
-  headerWithBack: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: SPACING.md || 20,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border || '#E5E5E5',
-  },
-  backButton: {
-    marginRight: SPACING.md || 20,
-  },
-  backButtonText: {
-    fontSize: FONT_SIZES.md || 16,
-    color: COLORS.primary || '#8B5CF6',
-  },
-  title: {
-    fontSize: FONT_SIZES.xl || 24,
-    fontWeight: 'bold',
-    color: COLORS.text || '#000000',
-  },
-  contactsTitle: {
-    fontSize: FONT_SIZES.lg || 18,
-    fontWeight: 'bold',
-    color: COLORS.text || '#000000',
-  },
-  content: {
-    flex: 1,
-  },
-  contactsContent: {
-    flex: 1,
-    padding: SPACING.md || 20,
-  },
-  welcomeContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: SPACING.lg || 24,
-  },
-  welcomeTitle: {
-    fontSize: FONT_SIZES.xxl || 28,
-    fontWeight: 'bold',
-    color: COLORS.text || '#000000',
-    marginBottom: SPACING.md || 20,
-    textAlign: 'center',
-  },
-  welcomeText: {
-    fontSize: FONT_SIZES.md || 16,
-    color: COLORS.secondaryText || '#666666',
-    textAlign: 'center',
-    marginBottom: SPACING.xl || 32,
-  },
-  contactsButton: {
-    backgroundColor: COLORS.primary || '#8B5CF6',
-    paddingVertical: SPACING.md || 20,
-    paddingHorizontal: SPACING.xl || 32,
-    borderRadius: 10,
-    marginTop: SPACING.md || 20,
-  },
-  contactsButtonText: {
-    color: '#FFFFFF',
-    fontSize: FONT_SIZES.md || 16,
-    fontWeight: '600',
-  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
   loadingText: {
-    marginTop: SPACING.md || 20,
-    fontSize: FONT_SIZES.md || 16,
-    color: COLORS.text || '#000000',
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+  },
+  profileContainer: {
+    flex: 1,
+    padding: SPACING.md,
+  },
+  profileImageContainer: {
+    alignItems: 'center',
+    marginTop: SPACING.xl,
+  },
+  profileImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+  },
+  profileImagePlaceholder: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileInitial: {
+    fontSize: FONT_SIZES.xxl,
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  userInfoContainer: {
+    alignItems: 'center',
+    marginTop: SPACING.lg,
+  },
+  userName: {
+    fontSize: FONT_SIZES.xl,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginBottom: SPACING.xs,
+  },
+  userEmail: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.secondaryText || '#666',
+    marginBottom: SPACING.xs,
+  },
+  userPhone: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.secondaryText || '#666',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    marginTop: SPACING.xl,
+    padding: SPACING.md,
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: FONT_SIZES.xl,
+    fontWeight: 'bold',
+    color: COLORS.primary,
+  },
+  statLabel: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.secondaryText || '#666',
+    marginTop: SPACING.xs,
+  },
+  statDivider: {
+    width: 1,
+    backgroundColor: COLORS.border,
+    marginHorizontal: SPACING.md,
+  },
+  actionsContainer: {
+    marginTop: SPACING.xl,
+    gap: SPACING.md,
+  },
+  actionButton: {
+    backgroundColor: COLORS.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: SPACING.md,
+    borderRadius: 10,
+  },
+  secondaryButton: {
+    backgroundColor: COLORS.secondary || '#0EA5E9',
+  },
+  dangerButton: {
+    backgroundColor: COLORS.danger || '#DC2626',
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
+    marginLeft: SPACING.sm,
   },
   contactsContainer: {
     flex: 1,
   },
-  sectionTitle: {
-    fontSize: FONT_SIZES.lg || 18,
+  contactsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  backButton: {
+    marginRight: SPACING.md,
+  },
+  contactsTitle: {
+    fontSize: FONT_SIZES.lg,
     fontWeight: 'bold',
-    marginBottom: SPACING.md || 20,
-    color: COLORS.text || '#000000',
+    color: COLORS.text,
+    flex: 1,
   },
-  sectionSubtitle: {
-    fontSize: FONT_SIZES.md || 16,
-    fontWeight: '600',
-    marginVertical: SPACING.sm || 12,
-    color: COLORS.text || '#000000',
+  sectionContainer: {
+    marginBottom: SPACING.lg,
   },
-  list: {
-    maxHeight: 300,
-    marginBottom: SPACING.md || 20,
+  sectionTitle: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    backgroundColor: COLORS.lightBackground || '#F3F4F6',
+    padding: SPACING.sm,
+    color: COLORS.text,
   },
   contactItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: SPACING.sm || 12,
-    paddingHorizontal: SPACING.sm || 12,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border || '#E5E5E5',
+    borderBottomColor: COLORS.border,
   },
   contactInfo: {
     flex: 1,
   },
   contactName: {
-    fontSize: FONT_SIZES.md || 16,
+    fontSize: FONT_SIZES.md,
     fontWeight: '500',
-    color: COLORS.text || '#000000',
+    color: COLORS.text,
+    marginBottom: 2,
   },
   contactPhone: {
-    fontSize: FONT_SIZES.sm || 14,
-    color: COLORS.secondaryText || '#666666',
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.secondaryText || '#666',
   },
-  enrolledBadge: {
-    fontSize: FONT_SIZES.xs || 12,
-    color: COLORS.primary || '#8B5CF6',
-    marginTop: SPACING.xs || 4,
+  registeredBadge: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.primary,
+    marginTop: 2,
+    fontWeight: '500',
   },
-  viewButton: {
-    backgroundColor: COLORS.primary || '#8B5CF6',
-    paddingVertical: SPACING.xs || 8,
-    paddingHorizontal: SPACING.sm || 12,
-    borderRadius: 6,
+  invitedBadge: {
+    fontSize: FONT_SIZES.xs,
+    color: '#F59E0B', // Amber color for invited status
+    marginTop: 2,
+    fontWeight: '500',
   },
-  viewButtonText: {
-    color: '#FFFFFF',
-    fontSize: FONT_SIZES.sm || 14,
-    fontWeight: '600',
+  viewProfileButton: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    borderRadius: 5,
+  },
+  viewProfileButtonText: {
+    color: 'white',
+    fontSize: FONT_SIZES.sm,
+    fontWeight: '500',
   },
   inviteButton: {
-    backgroundColor: COLORS.secondary || '#F59E0B',
-    paddingVertical: SPACING.xs || 8,
-    paddingHorizontal: SPACING.sm || 12,
-    borderRadius: 6,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  invitedButton: {
+    backgroundColor: '#D1D5DB', // Gray color for already invited
   },
   inviteButtonText: {
-    color: '#FFFFFF',
-    fontSize: FONT_SIZES.sm || 14,
-    fontWeight: '600',
+    color: COLORS.white,
+    fontSize: FONT_SIZES.xs,
+    fontWeight: 'bold',
   },
-  footer: {
-    padding: SPACING.md || 20,
+  inviteIcon: {
+    marginLeft: 4,
   },
-  signOutButton: {
-    backgroundColor: COLORS.primary || '#8B5CF6',
-    height: 54,
-    borderRadius: 10,
-    justifyContent: 'center',
+  emptyListText: {
+    padding: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.secondaryText || '#666',
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
+  sectionHeader: {
+    backgroundColor: COLORS.backgroundLight,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+  },
+  emptyContainer: {
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.xl,
   },
-  signOutButtonText: {
-    color: '#FFFFFF',
-    fontSize: FONT_SIZES.md || 18,
-    fontWeight: '600',
+  emptyTitle: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: 'bold',
+    color: COLORS.textLight,
+    marginTop: SPACING.md,
+  },
+  emptySubtitle: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textLight,
+    textAlign: 'center',
+    marginTop: SPACING.xs,
+  },
+  emptyText: {
+    textAlign: 'center',
+    padding: SPACING.md,
+    color: COLORS.textLight,
+    fontSize: FONT_SIZES.sm,
+  },
+  contactsList: {
+    flex: 1,
   },
 });
 
-export default HomeScreen; 
+export default ProfileScreen; 

@@ -197,6 +197,96 @@ export const signOut = async () => {
 };
 
 /**
+ * Checks if a phone number has already been invited
+ * @param {string} phoneNumber - The phone number to check
+ * @returns {Promise<boolean>} - Whether the phone number has been invited
+ */
+export const checkInvitationStatus = async (phoneNumber) => {
+  try {
+    // Standardize phone number by removing non-digit characters
+    const standardizedNumber = phoneNumber.replace(/\D/g, '');
+    
+    const { data, error } = await supabase
+      .from('invitations')
+      .select('id')
+      .eq('invited_phone', standardizedNumber)
+      .limit(1);
+    
+    if (error) {
+      console.error('Error checking invitation status:', error);
+      throw new Error('Failed to check invitation status');
+    }
+    
+    return data && data.length > 0;
+  } catch (error) {
+    console.error('Error in checkInvitationStatus:', error);
+    throw error;
+  }
+};
+
+/**
+ * Sends an invitation to a contact
+ * @param {string} name - The name of the contact
+ * @param {string} phoneNumber - The phone number of the contact
+ * @param {string} message - Optional message to include with the invitation
+ * @returns {Promise<Object>} - Result of the invitation
+ */
+export const sendInvitation = async (name, phoneNumber, message = '') => {
+  try {
+    // Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError) {
+      console.error('Error getting current user:', userError);
+      throw new Error('You must be logged in to send invitations');
+    }
+    
+    // Standardize phone number by removing non-digit characters
+    const standardizedNumber = phoneNumber.replace(/\D/g, '');
+    
+    // Check if already invited
+    const isAlreadyInvited = await checkInvitationStatus(standardizedNumber);
+    
+    if (isAlreadyInvited) {
+      return { 
+        success: false, 
+        already_invited: true,
+        message: `${name} has already been invited` 
+      };
+    }
+    
+    // Create invitation record
+    const { data, error } = await supabase
+      .from('invitations')
+      .insert({
+        inviter_id: user.id,
+        invited_name: name,
+        invited_phone: standardizedNumber,
+        message: message,
+        status: 'sent'
+      })
+      .select();
+    
+    if (error) {
+      console.error('Error creating invitation:', error);
+      throw new Error('Failed to send invitation');
+    }
+    
+    // TODO: In production, you would integrate with SMS service to send actual SMS invitation
+    // For now, we'll just record the invitation in the database
+    
+    return { 
+      success: true, 
+      invitation: data[0],
+      message: `Invitation sent to ${name}`
+    };
+  } catch (error) {
+    console.error('Error in sendInvitation:', error);
+    throw error;
+  }
+};
+
+/**
  * Get the current user's profile data
  * @returns {Promise<object>} - The user's profile data
  */

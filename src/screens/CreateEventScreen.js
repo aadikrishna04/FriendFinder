@@ -26,6 +26,7 @@ import * as Location from "expo-location";
 import { MaterialIcons } from "@expo/vector-icons";
 import MapView, { Marker } from "react-native-maps";
 import * as Contacts from "expo-contacts";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 const CreateEventScreen = () => {
   const navigation = useNavigation();
@@ -33,6 +34,8 @@ const CreateEventScreen = () => {
   const [address, setAddress] = useState("");
   const [description, setDescription] = useState("");
   const [date, setDate] = useState(new Date());
+  const [startTime, setStartTime] = useState(new Date());
+  const [endTime, setEndTime] = useState(new Date(Date.now() + 3600000)); // Default to 1 hour later
   const [image, setImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [isOpen, setIsOpen] = useState(true);
@@ -40,6 +43,11 @@ const CreateEventScreen = () => {
   const [tags, setTags] = useState("");
   const [coordinates, setCoordinates] = useState(null);
   const [user, setUser] = useState(null);
+
+  // Time picker state
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
 
   // Address validation
   const [validatingAddress, setValidatingAddress] = useState(false);
@@ -221,23 +229,176 @@ const CreateEventScreen = () => {
       const { data } = await Contacts.getContactsAsync({
         fields: [
           Contacts.Fields.PhoneNumbers,
+          Contacts.Fields.Emails,  // Explicitly request emails
           Contacts.Fields.Name,
           Contacts.Fields.Image,
         ],
         sort: Contacts.SortTypes.FirstName,
       });
 
+      console.log(`Loaded ${data.length} contacts`);
+      
+      // Log how many contacts have emails
+      const contactsWithEmails = data.filter(
+        (contact) => contact.emails && contact.emails.length > 0
+      );
+      console.log(`${contactsWithEmails.length} contacts have email addresses`);
+
       const contactsWithPhones = data.filter(
         (contact) => contact.phoneNumbers && contact.phoneNumbers.length > 0
       );
+      
+      console.log(`${contactsWithPhones.length} contacts have phone numbers`);
 
-      setContacts(contactsWithPhones);
+      // Use contacts with either emails or phone numbers
+      const usableContacts = data.filter(
+        (contact) => 
+          (contact.phoneNumbers && contact.phoneNumbers.length > 0) ||
+          (contact.emails && contact.emails.length > 0)
+      );
+      
+      console.log(`${usableContacts.length} contacts have either email or phone`);
+      
+      // Fetch registered app users and enhance the contacts with app user info
+      const enhancedContacts = await fetchRegisteredUsers(usableContacts);
+      
+      setContacts(enhancedContacts);
       setShowingContacts(true);
     } catch (error) {
       console.error("Error loading contacts:", error);
       Alert.alert("Error", "Failed to load contacts");
     } finally {
       setLoadingContacts(false);
+    }
+  };
+  
+  // Fetch registered users from database and match with contacts
+  const fetchRegisteredUsers = async (contactsList) => {
+    try {
+      // Extract all unique emails and phone numbers from contacts
+      const emailsSet = new Set();
+      const phonesSet = new Set();
+      
+      contactsList.forEach(contact => {
+        // Get emails
+        if (contact.emails && contact.emails.length > 0) {
+          contact.emails.forEach(email => {
+            if (email.email) emailsSet.add(email.email.toLowerCase());
+          });
+        }
+        
+        // Get phones
+        if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+          contact.phoneNumbers.forEach(phone => {
+            // Standardize phone numbers by removing non-digit characters
+            const standardizedPhone = phone.number.replace(/\D/g, '');
+            if (standardizedPhone) phonesSet.add(standardizedPhone);
+          });
+        }
+      });
+      
+      const emails = Array.from(emailsSet);
+      const phones = Array.from(phonesSet);
+      
+      console.log(`Extracted ${emails.length} unique emails and ${phones.length} unique phone numbers`);
+      
+      // Find registered users by email
+      const { data: emailUsers, error: emailError } = await supabase
+        .from('users')
+        .select('id, name, email, phone_number')
+        .in('email', emails);
+      
+      if (emailError) {
+        console.error('Error fetching users by email:', emailError);
+      }
+      
+      // Find registered users by phone
+      const { data: phoneUsers, error: phoneError } = await supabase
+        .from('users')
+        .select('id, name, email, phone_number')
+        .in('phone_number', phones);
+      
+      if (phoneError) {
+        console.error('Error fetching users by phone:', phoneError);
+      }
+      
+      // Combine users, avoiding duplicates
+      const appUsers = [];
+      const userIds = new Set();
+      
+      if (emailUsers) {
+        emailUsers.forEach(user => {
+          if (!userIds.has(user.id)) {
+            appUsers.push(user);
+            userIds.add(user.id);
+          }
+        });
+      }
+      
+      if (phoneUsers) {
+        phoneUsers.forEach(user => {
+          if (!userIds.has(user.id)) {
+            appUsers.push(user);
+            userIds.add(user.id);
+          }
+        });
+      }
+      
+      console.log(`Found ${appUsers.length} registered app users`);
+      
+      // Create lookup maps for both email and phone
+      const emailMap = new Map();
+      const phoneMap = new Map();
+      
+      appUsers.forEach(user => {
+        if (user.email) emailMap.set(user.email.toLowerCase(), user);
+        if (user.phone_number) phoneMap.set(user.phone_number, user);
+      });
+      
+      // Enhance contacts with app user data
+      return contactsList.map(contact => {
+        // Try to match by email first
+        let appUser = null;
+        
+        if (contact.emails && contact.emails.length > 0) {
+          for (const emailObj of contact.emails) {
+            if (emailObj.email) {
+              const email = emailObj.email.toLowerCase();
+              if (emailMap.has(email)) {
+                appUser = emailMap.get(email);
+                break;
+              }
+            }
+          }
+        }
+        
+        // If no match by email, try by phone
+        if (!appUser && contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+          for (const phoneObj of contact.phoneNumbers) {
+            const standardizedPhone = phoneObj.number.replace(/\D/g, '');
+            if (phoneMap.has(standardizedPhone)) {
+              appUser = phoneMap.get(standardizedPhone);
+              break;
+            }
+          }
+        }
+        
+        // Return enhanced contact
+        return appUser ? {
+          ...contact,
+          appUserId: appUser.id,
+          appUserEmail: appUser.email,
+          appUserName: appUser.name,
+          appUserPhone: appUser.phone_number,
+          isRegistered: true
+        } : {
+          ...contact,
+          isRegistered: false
+        };
+      });
+    } catch (error) {
+      console.error('Error fetching registered users:', error);
+      return contactsList; // Return original list if there's an error
     }
   };
 
@@ -283,6 +444,21 @@ const CreateEventScreen = () => {
       // Make sure we have a valid date with time
       const eventDate = new Date(date);
 
+      // Format start and end times
+      const startTimeStr = startTime
+        ? `${startTime.getHours().toString().padStart(2, "0")}:${startTime
+            .getMinutes()
+            .toString()
+            .padStart(2, "0")}:00`
+        : null;
+
+      const endTimeStr = endTime
+        ? `${endTime.getHours().toString().padStart(2, "0")}:${endTime
+            .getMinutes()
+            .toString()
+            .padStart(2, "0")}:00`
+        : null;
+
       // Parse tags if this is an open event
       const parsedTags = isOpen
         ? tags
@@ -301,6 +477,8 @@ const CreateEventScreen = () => {
             description,
             location: address,
             event_date: eventDate.toISOString(),
+            start_time: startTimeStr,
+            end_time: endTimeStr,
             image_url: imageUrl,
             is_open: isOpen,
             tags: parsedTags,
@@ -315,12 +493,113 @@ const CreateEventScreen = () => {
 
       // If invite-only, handle invited contacts
       if (!isOpen && selectedContacts.length > 0) {
-        // In a real app, you would store these invitations in a table
-        // For now, we'll just show an alert with the invited contacts
-        const invitedNames = selectedContacts.map((c) => c.name).join(", ");
+        const eventId = data[0].id; // Get the newly created event ID
+        
+        // Process each selected contact and create invitations
+        const invitePromises = selectedContacts.map(async (contact) => {
+          try {
+            // Log contact info
+            console.log(`Processing contact: ${contact.name}`);
+            
+            // If this contact is a registered user (matched during fetchRegisteredUsers)
+            if (contact.isRegistered && contact.appUserId) {
+              console.log(`Using app data for registered user: ${contact.appUserName} (${contact.appUserEmail})`);
+              
+              // Use the app user ID directly - DO NOT include email/phone due to DB constraint
+              const { error: inviteError } = await supabase
+                .from('event_invitations')
+                .insert({
+                  event_id: eventId,
+                  inviter_id: user.id,
+                  invitee_id: contact.appUserId,
+                  status: 'pending'
+                });
+              
+              if (inviteError) {
+                console.error('Error creating invitation with app user ID:', inviteError);
+                return null;
+              }
+              
+              return { 
+                type: 'registered', 
+                user: { 
+                  id: contact.appUserId,
+                  name: contact.appUserName,
+                  email: contact.appUserEmail
+                }
+              };
+            }
+            
+            // For non-registered users, get contact info from device
+            // Get contact email if available
+            let email = null;
+            if (contact.emails && contact.emails.length > 0) {
+              email = contact.emails[0].email;
+              console.log(`Using device email for non-registered user ${contact.name}: ${email}`);
+            } else {
+              console.log(`No email found for contact: ${contact.name}`);
+            }
+            
+            // If no email available, try to use phone as fallback
+            let phoneNumber = null;
+            if (!email && contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+              // Extract just the digits from the phone number
+              phoneNumber = contact.phoneNumbers[0].number.replace(/\D/g, '');
+              
+              // Format consistently with country code (assuming US numbers)
+              if (phoneNumber.length === 10) {
+                phoneNumber = `+1${phoneNumber}`;
+              } else if (phoneNumber.length > 10 && !phoneNumber.startsWith('+')) {
+                phoneNumber = `+${phoneNumber}`;
+              }
+              console.log(`Using device phone for non-registered user ${contact.name}: ${phoneNumber}`);
+            }
+            
+            if (!email && !phoneNumber) {
+              console.log('No contact info for:', contact.name);
+              return null;
+            }
+            
+            // Store invitation with contact info for non-registered user
+            const contactValue = email || phoneNumber;
+            const contactType = email ? 'email' : 'phone';
+            
+            const { error: inviteError } = await supabase
+              .from('event_invitations')
+              .insert({
+                event_id: eventId,
+                inviter_id: user.id,
+                invitee_phone: contactType === 'phone' ? contactValue : null,
+                invitee_email: contactType === 'email' ? contactValue : null,
+                status: 'pending'
+              });
+            
+            if (inviteError) {
+              console.error('Error creating contact invitation:', inviteError);
+              return null;
+            }
+            
+            return { 
+              type: 'unregistered', 
+              contactType,
+              contactValue,
+              name: contact.name 
+            };
+          } catch (error) {
+            console.error('Error processing invitation:', error);
+            return null;
+          }
+        });
+        
+        const results = await Promise.all(invitePromises);
+        const validResults = results.filter(r => r !== null);
+        
+        const registeredCount = validResults.filter(r => r.type === 'registered').length;
+        const unregisteredCount = validResults.filter(r => r.type === 'unregistered').length;
+        
         Alert.alert(
-          "Invitations",
-          `Invitations would be sent to: ${invitedNames}`
+          "Invitations Sent",
+          `Invitations sent to ${registeredCount} registered users and ${unregisteredCount} contacts who aren't registered yet.`
         );
       }
 
@@ -431,6 +710,132 @@ const CreateEventScreen = () => {
       <MaterialIcons name="location-on" size={20} color={COLORS.primary} />
       <Text style={styles.addressResultText}>{item.name}</Text>
     </TouchableOpacity>
+  );
+
+  // Add these new functions for date/time handling
+  
+  // Format time for display
+  const formatTime = (date) => {
+    let hours = date.getHours();
+    let minutes = date.getMinutes();
+    const ampm = hours >= 12 ? "PM" : "AM";
+
+    hours = hours % 12;
+    hours = hours ? hours : 12; // the hour '0' should be '12'
+    minutes = minutes < 10 ? "0" + minutes : minutes;
+
+    return `${hours}:${minutes} ${ampm}`;
+  };
+
+  // Format date for display
+  const formatDate = (date) => {
+    return date.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  };
+
+  // Handle date change
+  const onDateChange = (event, selectedDate) => {
+    const currentDate = selectedDate || date;
+    setShowDatePicker(false);
+    setDate(currentDate);
+  };
+
+  // Handle start time change
+  const onStartTimeChange = (event, selectedTime) => {
+    const currentTime = selectedTime || startTime;
+    setShowStartTimePicker(false);
+    setStartTime(currentTime);
+  };
+
+  // Handle end time change
+  const onEndTimeChange = (event, selectedTime) => {
+    const currentTime = selectedTime || endTime;
+    setShowEndTimePicker(false);
+    setEndTime(currentTime);
+  };
+
+  // Render date and time pickers
+  const renderDateTimePickers = () => (
+    <View style={styles.inputContainer}>
+      <Text style={styles.label}>Event Date & Time</Text>
+
+      <TouchableOpacity
+        style={styles.datePickerButton}
+        onPress={() => setShowDatePicker(true)}
+      >
+        <MaterialIcons name="event" size={20} color={COLORS.primary} />
+        <Text style={styles.dateTimeText}>{formatDate(date)}</Text>
+      </TouchableOpacity>
+
+      <View style={styles.timePickersRow}>
+        <View style={styles.timePickerContainer}>
+          <Text style={styles.timeLabel}>Start Time</Text>
+          <TouchableOpacity
+            style={styles.timePickerButton}
+            onPress={() => setShowStartTimePicker(true)}
+          >
+            <MaterialIcons
+              name="access-time"
+              size={20}
+              color={COLORS.primary}
+            />
+            <Text style={styles.dateTimeText}>{formatTime(startTime)}</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.timePickerContainer}>
+          <Text style={styles.timeLabel}>End Time</Text>
+          <TouchableOpacity
+            style={styles.timePickerButton}
+            onPress={() => setShowEndTimePicker(true)}
+          >
+            <MaterialIcons
+              name="access-time"
+              size={20}
+              color={COLORS.primary}
+            />
+            <Text style={styles.dateTimeText}>{formatTime(endTime)}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {showDatePicker && (
+        <DateTimePicker
+          testID="dateTimePicker"
+          value={date}
+          mode="date"
+          is24Hour={true}
+          display="default"
+          onChange={onDateChange}
+        />
+      )}
+
+      {showStartTimePicker && (
+        <DateTimePicker
+          testID="startTimePicker"
+          value={startTime}
+          mode="time"
+          is24Hour={false}
+          display="default"
+          onChange={onStartTimeChange}
+        />
+      )}
+
+      {showEndTimePicker && (
+        <DateTimePicker
+          testID="endTimePicker"
+          value={endTime}
+          mode="time"
+          is24Hour={false}
+          display="default"
+          onChange={onEndTimeChange}
+        />
+      )}
+    </View>
   );
 
   return (
@@ -653,6 +1058,9 @@ const CreateEventScreen = () => {
                 </View>
               </View>
 
+              {/* Add the date/time pickers here */}
+              {renderDateTimePickers()}
+
               <TouchableOpacity
                 style={[
                   styles.createButton,
@@ -831,12 +1239,11 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
   tagsInput: {
-    height: LAYOUT.inputHeight,
-    backgroundColor: "#F0F0F0",
-    borderRadius: LAYOUT.borderRadius,
-    paddingHorizontal: SPACING.md,
-    fontSize: FONT_SIZES.md,
-    color: COLORS.text,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: SPACING.xs,
+    padding: SPACING.sm,
+    marginTop: SPACING.xs,
   },
   inviteButton: {
     height: LAYOUT.inputHeight,
@@ -973,6 +1380,44 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  // Add styles for date and time pickers
+  datePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.sm,
+    backgroundColor: '#f8f8f8',
+    borderRadius: SPACING.xs,
+    marginTop: SPACING.xs,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  dateTimeText: {
+    fontSize: FONT_SIZES.md,
+    marginLeft: SPACING.xs,
+    color: COLORS.text,
+  },
+  timePickersRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: SPACING.md,
+  },
+  timePickerContainer: {
+    flex: 0.48,
+  },
+  timeLabel: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text,
+    marginBottom: SPACING.xs,
+  },
+  timePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.sm,
+    backgroundColor: '#f8f8f8',
+    borderRadius: SPACING.xs,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
