@@ -902,7 +902,7 @@ const CreateEventScreen = () => {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.timePickerContainer}>
+        <View style={styles.timePickerContainerEnd}>
           <Text style={styles.timeLabel}>End Time</Text>
           <TouchableOpacity
             style={styles.timePickerButton}
@@ -1356,6 +1356,7 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     marginBottom: SPACING.md,
+    paddingHorizontal: SPACING.md,
   },
   label: {
     fontSize: FONT_SIZES.md,
@@ -1633,10 +1634,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: SPACING.md,
+    marginTop: SPACING.xs,
   },
   timePickerContainer: {
     flex: 1,
     marginRight: SPACING.sm,
+  },
+  timePickerContainerEnd: {
+    flex: 1,
   },
   timePickerButton: {
     flexDirection: "row",
