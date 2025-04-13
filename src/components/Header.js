@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Modal, ScrollView, SafeAreaView, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Modal, FlatList, SafeAreaView, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../services/supabaseClient';
 import { COLORS, FONT_SIZES, SPACING } from '../constants';
@@ -25,15 +25,18 @@ const Header = ({ location, eventsCount, onLocationPress, profile, onRadiusChang
         setUser(user);
         
         if (user) {
-          // Get the profile information to get the name
+          // Get the user's name from the users table
           const { data, error } = await supabase
-            .from('profiles')
-            .select('first_name')
+            .from('users')
+            .select('name')
             .eq('id', user.id)
             .single();
             
-          if (data && data.first_name) {
-            setUserName(data.first_name);
+          if (data && data.name) {
+            setUserName(data.name);
+          } else if (user.email) {
+            // If no name, use the part of email before @
+            setUserName(user.email.split('@')[0]);
           }
         }
       } catch (error) {
@@ -91,6 +94,24 @@ const Header = ({ location, eventsCount, onLocationPress, profile, onRadiusChang
     </View>
   );
 
+  // Radius Option Item component
+  const RadiusOptionItem = ({ option, selected, onSelect }) => (
+    <TouchableOpacity
+      style={[
+        styles.radiusOption,
+        selected && styles.selectedRadiusOption
+      ]}
+      onPress={() => onSelect(option)}
+    >
+      <Text style={[
+        styles.radiusOptionText,
+        selected && styles.selectedRadiusText
+      ]}>
+        {option} miles
+      </Text>
+    </TouchableOpacity>
+  );
+
   return (
     <>
       <LinearGradient
@@ -114,7 +135,7 @@ const Header = ({ location, eventsCount, onLocationPress, profile, onRadiusChang
           </View>
           
           <View style={styles.greetingContainer}>
-            <Text style={styles.greeting}>Hello, {userName || 'Friend'}</Text>
+            <Text style={styles.greeting}>Hello, {userName}</Text>
             <Text style={styles.eventsText}>
               There are {eventsCount || 0} new events in your area.
             </Text>
@@ -151,25 +172,17 @@ const Header = ({ location, eventsCount, onLocationPress, profile, onRadiusChang
           <View style={styles.radiusModalContainer}>
             <View style={styles.radiusModalContent}>
               <Text style={styles.modalTitle}>Select Search Radius</Text>
-              <ScrollView>
-                {radius_options.map((option) => (
-                  <TouchableOpacity
-                    key={option}
-                    style={[
-                      styles.radiusOption,
-                      radius === option && styles.selectedRadiusOption
-                    ]}
-                    onPress={() => handleRadiusSelect(option)}
-                  >
-                    <Text style={[
-                      styles.radiusOptionText,
-                      radius === option && styles.selectedRadiusText
-                    ]}>
-                      {option} miles
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+              <FlatList
+                data={radius_options}
+                keyExtractor={(item) => item.toString()}
+                renderItem={({ item }) => (
+                  <RadiusOptionItem 
+                    option={item} 
+                    selected={radius === item}
+                    onSelect={handleRadiusSelect}
+                  />
+                )}
+              />
             </View>
           </View>
         </TouchableOpacity>
@@ -203,29 +216,49 @@ const Header = ({ location, eventsCount, onLocationPress, profile, onRadiusChang
                 <Text style={styles.profileModalEmail}>{user?.email || ''}</Text>
               </View>
               
-              <TouchableOpacity 
-                style={styles.profileOption}
-                onPress={navigateToProfileScreen}
-              >
-                <Ionicons name="person-circle-outline" size={24} color={COLORS.text} />
-                <Text style={styles.profileOptionText}>View Profile</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.profileOption}
-                onPress={() => setShowProfileModal(false)}
-              >
-                <Ionicons name="settings-outline" size={24} color={COLORS.text} />
-                <Text style={styles.profileOptionText}>Settings</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.profileOption, styles.signOutOption]}
-                onPress={handleSignOut}
-              >
-                <Ionicons name="log-out-outline" size={24} color="#ff3b30" />
-                <Text style={styles.signOutText}>Sign Out</Text>
-              </TouchableOpacity>
+              <FlatList
+                data={[
+                  {
+                    id: 'profile',
+                    icon: 'person-circle-outline',
+                    text: 'View Profile',
+                    color: COLORS.text,
+                    onPress: navigateToProfileScreen,
+                    style: {}
+                  },
+                  {
+                    id: 'settings',
+                    icon: 'settings-outline',
+                    text: 'Settings',
+                    color: COLORS.text,
+                    onPress: () => setShowProfileModal(false),
+                    style: {}
+                  },
+                  {
+                    id: 'signout',
+                    icon: 'log-out-outline',
+                    text: 'Sign Out',
+                    color: '#ff3b30',
+                    onPress: handleSignOut,
+                    style: { marginTop: 20, borderBottomWidth: 0 }
+                  }
+                ]}
+                keyExtractor={item => item.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity 
+                    style={[styles.profileOption, item.style]}
+                    onPress={item.onPress}
+                  >
+                    <Ionicons name={item.icon} size={24} color={item.color} />
+                    <Text style={[
+                      styles.profileOptionText, 
+                      item.id === 'signout' && styles.signOutText
+                    ]}>
+                      {item.text}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              />
             </View>
           </View>
         </TouchableOpacity>
@@ -421,10 +454,6 @@ const styles = StyleSheet.create({
   profileOptionText: {
     fontSize: 16,
     marginLeft: 15,
-  },
-  signOutOption: {
-    marginTop: 20,
-    borderBottomWidth: 0,
   },
   signOutText: {
     fontSize: 16,

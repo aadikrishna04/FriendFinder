@@ -13,7 +13,10 @@ import {
   ScrollView,
   ActivityIndicator,
   TextInput,
-  SafeAreaView
+  SafeAreaView,
+  FlatList,
+  TouchableWithoutFeedback,
+  LogBox
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { supabase } from "../services/supabaseClient";
@@ -22,6 +25,12 @@ import { COLORS, SPACING, FONT_SIZES } from "../constants";
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { Header } from "../components";
 import * as Location from 'expo-location';
+
+// Ignore specific warnings
+LogBox.ignoreLogs([
+  'VirtualizedLists should never be nested inside plain ScrollViews',
+  'Animated: `useNativeDriver` was not specified'
+]);
 
 const { height, width } = Dimensions.get("window");
 
@@ -620,123 +629,12 @@ const MapScreen = ({ navigation }) => {
     }
   };
 
-  const renderEventDetails = () => {
-    if (!selectedEvent) return null;
-    
-    const eventDate = formatDate(selectedEvent.event_date || new Date());
-    
-    return (
-      <View style={styles.drawerContent}>
-        {/* Event Image */}
-        {selectedEvent.image_url ? (
-          <Image
-            source={{ uri: selectedEvent.image_url }}
-            style={styles.eventImage}
-            resizeMode="cover"
-          />
-        ) : (
-          <View style={styles.imagePlaceholder}>
-            <MaterialIcons name="image" size={50} color={COLORS.border} />
-          </View>
-        )}
-        
-        {/* Event Details */}
-        <View style={styles.eventDetails}>
-          <Text style={styles.eventTitle}>
-            {selectedEvent.title || 'Event Title'}
-          </Text>
-          <Text style={styles.eventLocation}>
-            {selectedEvent.location || 'No Location Specified'}
-          </Text>
-          <Text style={styles.eventDate}>{eventDate}</Text>
-          
-          {/* Description */}
-          <ScrollView style={styles.descriptionScroll}>
-            <Text style={styles.eventDescription}>
-              {selectedEvent.description || "No description available."}
-            </Text>
-          </ScrollView>
-          
-          {/* Action Buttons */}
-          <View style={styles.actionButtons}>
-            {selectedEvent.is_external ? (
-              // External event action
-              <TouchableOpacity
-                style={[styles.actionButton, styles.primaryButton]}
-                onPress={openExternalEvent}
-              >
-                <Text style={styles.actionButtonText}>View Event Details</Text>
-              </TouchableOpacity>
-            ) : (
-              // Internal event actions
-              <>
-                {loadingAttendance ? (
-                  <ActivityIndicator color={COLORS.primary} style={styles.attendingIndicator} />
-                ) : selectedEvent.host_id === user?.id ? (
-                  // Host actions
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.editButton]}
-                    onPress={goToEditEvent}
-                  >
-                    <Text style={styles.actionButtonText}>Edit Event</Text>
-                  </TouchableOpacity>
-                ) : (
-                  // Attendee actions
-                  <TouchableOpacity
-                    style={[
-                      styles.actionButton,
-                      attending ? styles.attendingButton : styles.primaryButton
-                    ]}
-                    onPress={toggleAttendance}
-                  >
-                    <Text style={styles.actionButtonText}>
-                      {attending ? "Cancel Attendance" : "Attend Event"}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.secondaryButton]}
-                  onPress={goToEventDetails}
-                >
-                  <Text style={styles.actionButtonText}>View Details</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-          
-          {/* Attendees section (only for internal events) */}
-          {!selectedEvent.is_external && (
-            <View style={styles.attendeesSection}>
-              <Text style={styles.sectionTitle}>
-                {attendees.length} {attendees.length === 1 ? "Person" : "People"} Attending
-              </Text>
-              
-              {/* Host info */}
-              <View style={styles.hostInfo}>
-                <Text style={styles.hostLabel}>Hosted by:</Text>
-                <Text style={styles.hostName}>
-                  {hostInfo?.name || (selectedEvent.host_id === user?.id ? user?.email?.split('@')[0] : "Unknown")}
-                </Text>
-              </View>
-            </View>
-          )}
-        </View>
-      </View>
-    );
-  };
-
-  // Function to handle location selection
-  const handleLocationPress = () => {
-    setShowLocationSelector(true);
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <Header
         location={locationName}
         eventsCount={eventsNearby}
-        onLocationPress={handleLocationPress}
+        onLocationPress={() => setShowLocationSelector(true)}
         profile={profileImage}
         onRadiusChange={handleRadiusChange}
         searchQuery={searchQuery}
@@ -801,45 +699,52 @@ const MapScreen = ({ navigation }) => {
         animationType="slide"
         onRequestClose={closeLocationSelector}
       >
-        <View style={styles.locationSelectorContainer}>
-          <View style={styles.locationSelectorHeader}>
-            <Text style={styles.locationSelectorTitle}>
-              {eventsAtLocation.length} Events at This Location
-            </Text>
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={closeLocationSelector}
-            >
-              <MaterialIcons name="close" size={24} color={COLORS.text} />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView>
-            {eventsAtLocation.map(event => (
-              <TouchableOpacity
-                key={event.id}
-                style={styles.locationEventItem}
-                onPress={() => {
-                  closeLocationSelector();
-                  handleEventPress(event);
-                }}
-              >
-                <View style={styles.locationEventInfo}>
-                  <Text style={styles.locationEventTitle}>{event.title}</Text>
-                  <Text style={styles.locationEventDate}>
-                    {formatDate(event.event_date)}
+        <TouchableWithoutFeedback onPress={closeLocationSelector}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.locationSelectorContainer}>
+                <View style={styles.locationSelectorHeader}>
+                  <Text style={styles.locationSelectorTitle}>
+                    {eventsAtLocation.length} Events at This Location
                   </Text>
+                  <TouchableOpacity
+                    style={styles.closeButton}
+                    onPress={closeLocationSelector}
+                  >
+                    <MaterialIcons name="close" size={24} color={COLORS.text} />
+                  </TouchableOpacity>
                 </View>
                 
-                <MaterialIcons
-                  name="chevron-right"
-                  size={24}
-                  color={COLORS.text}
+                <FlatList
+                  data={eventsAtLocation}
+                  keyExtractor={(event) => event.id.toString()}
+                  renderItem={({ item: event }) => (
+                    <TouchableOpacity
+                      style={styles.locationEventItem}
+                      onPress={() => {
+                        closeLocationSelector();
+                        handleEventPress(event);
+                      }}
+                    >
+                      <View style={styles.locationEventInfo}>
+                        <Text style={styles.locationEventTitle}>{event.title}</Text>
+                        <Text style={styles.locationEventDate}>
+                          {formatDate(event.event_date)}
+                        </Text>
+                      </View>
+                      
+                      <MaterialIcons
+                        name="chevron-right"
+                        size={24}
+                        color={COLORS.text}
+                      />
+                    </TouchableOpacity>
+                  )}
                 />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </Modal>
       
       {/* Event Details Drawer */}
@@ -849,20 +754,132 @@ const MapScreen = ({ navigation }) => {
         animationType="slide"
         onRequestClose={closeDrawer}
       >
-        <View style={styles.drawerContainer}>
-          <View style={styles.drawerHandle}>
-            <View style={styles.handleBar} />
+        <TouchableWithoutFeedback onPress={closeDrawer}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.drawerContainer}>
+                <View style={styles.drawerHandle}>
+                  <View style={styles.handleBar} />
+                </View>
+                
+                <TouchableOpacity
+                  style={styles.closeDrawerButton}
+                  onPress={closeDrawer}
+                >
+                  <MaterialIcons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+                
+                {selectedEvent && (
+                  <FlatList
+                    data={[{id: 'event-detail'}]}
+                    keyExtractor={item => item.id}
+                    renderItem={() => (
+                      <>
+                        {/* Event Image */}
+                        {selectedEvent.image_url ? (
+                          <Image
+                            source={{ uri: selectedEvent.image_url }}
+                            style={styles.eventImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <View style={styles.imagePlaceholder}>
+                            <MaterialIcons name="image" size={50} color={COLORS.border} />
+                          </View>
+                        )}
+                        
+                        {/* Event Details */}
+                        <View style={styles.eventDetails}>
+                          <Text style={styles.eventTitle}>
+                            {selectedEvent.title || 'Event Title'}
+                          </Text>
+                          <Text style={styles.eventLocation}>
+                            {selectedEvent.location || 'No Location Specified'}
+                          </Text>
+                          <Text style={styles.eventDate}>{formatDate(selectedEvent.event_date || new Date())}</Text>
+                          
+                          {/* Description */}
+                          <Text style={styles.eventDescription}>
+                            {selectedEvent.description || "No description available."}
+                          </Text>
+                          
+                          {/* Action Buttons */}
+                          <View style={styles.actionButtons}>
+                            {selectedEvent.is_external ? (
+                              // External event action
+                              <TouchableOpacity
+                                style={[styles.actionButton, styles.primaryButton]}
+                                onPress={openExternalEvent}
+                              >
+                                <Text style={styles.actionButtonText}>View Event Details</Text>
+                              </TouchableOpacity>
+                            ) : (
+                              // Internal event actions
+                              <>
+                                {loadingAttendance ? (
+                                  <ActivityIndicator color={COLORS.primary} style={styles.attendingIndicator} />
+                                ) : selectedEvent.host_id === user?.id ? (
+                                  // Host actions
+                                  <TouchableOpacity
+                                    style={[styles.actionButton, styles.editButton]}
+                                    onPress={goToEditEvent}
+                                  >
+                                    <Text style={styles.actionButtonText}>Edit Event</Text>
+                                  </TouchableOpacity>
+                                ) : (
+                                  // Attendee actions
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.actionButton,
+                                      attending ? styles.attendingButton : styles.primaryButton
+                                    ]}
+                                    onPress={toggleAttendance}
+                                  >
+                                    <Text style={styles.actionButtonText}>
+                                      {attending ? "Cancel Attendance" : "Attend Event"}
+                                    </Text>
+                                  </TouchableOpacity>
+                                )}
+                                
+                                <TouchableOpacity
+                                  style={[styles.actionButton, styles.secondaryButton]}
+                                  onPress={goToEventDetails}
+                                >
+                                  <Text style={styles.actionButtonText}>View Details</Text>
+                                </TouchableOpacity>
+                              </>
+                            )}
+                          </View>
+                          
+                          {/* Attendees section (only for internal events) */}
+                          {!selectedEvent.is_external && (
+                            <View style={styles.attendeesSection}>
+                              <Text style={styles.sectionTitle}>
+                                {attendees.length} {attendees.length === 1 ? "Person" : "People"} Attending
+                              </Text>
+                              
+                              {/* Host info */}
+                              <View style={styles.hostInfo}>
+                                <Text style={styles.hostLabel}>Hosted by:</Text>
+                                <Text style={styles.hostName}>
+                                  {hostInfo?.name || (selectedEvent.host_id === user?.id ? user?.email?.split('@')[0] : "Unknown")}
+                                </Text>
+                              </View>
+                            </View>
+                          )}
+                        </View>
+                      </>
+                    )}
+                    contentContainerStyle={{
+                      paddingBottom: 40,
+                      paddingHorizontal: SPACING.md
+                    }}
+                  />
+                )}
+              </View>
+            </TouchableWithoutFeedback>
           </View>
-          
-          <TouchableOpacity
-            style={styles.closeDrawerButton}
-            onPress={closeDrawer}
-          >
-            <MaterialIcons name="close" size={24} color={COLORS.text} />
-          </TouchableOpacity>
-          
-          {renderEventDetails()}
-        </View>
+        </TouchableWithoutFeedback>
       </Modal>
     </SafeAreaView>
   );
@@ -908,8 +925,8 @@ const styles = StyleSheet.create({
   },
   locationSelectorContainer: {
     backgroundColor: 'white',
-    marginTop: height * 0.3,
-    flex: 1,
+    height: height * 0.7,
+    width: '100%',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     shadowColor: '#000',
@@ -956,10 +973,9 @@ const styles = StyleSheet.create({
   drawerContainer: {
     backgroundColor: 'white',
     height: height * 0.7,
-    marginTop: height * 0.3,
+    width: '100%',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    padding: SPACING.md,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.2,
@@ -1021,14 +1037,11 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary || '#666',
     marginBottom: SPACING.lg,
   },
-  descriptionScroll: {
-    maxHeight: 100,
-    marginBottom: SPACING.lg,
-  },
   eventDescription: {
     fontSize: FONT_SIZES.md,
     color: COLORS.text,
     lineHeight: 22,
+    marginBottom: SPACING.lg,
   },
   actionButtons: {
     flexDirection: 'row',
@@ -1096,6 +1109,21 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: SPACING.md,
     color: COLORS.text,
+  },
+  eventDetailsContainer: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 10,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
   },
 });
 
