@@ -221,31 +221,42 @@ const EditEventScreen = () => {
     setLoadingContacts(true);
 
     try {
-      const { status } = await Contacts.requestPermissionsAsync();
+      // Fetch the current user's contacts from the database instead of device contacts
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError) throw userError;
 
-      if (status !== "granted") {
-        Alert.alert(
-          "Permission Denied",
-          "Cannot access contacts without permission"
-        );
-        setLoadingContacts(false);
-        return;
-      }
-
-      const { data } = await Contacts.getContactsAsync({
-        fields: [
-          Contacts.Fields.PhoneNumbers,
-          Contacts.Fields.Name,
-          Contacts.Fields.Image,
-        ],
-        sort: Contacts.SortTypes.FirstName,
-      });
-
-      const contactsWithPhones = data.filter(
-        (contact) => contact.phoneNumbers && contact.phoneNumbers.length > 0
-      );
-
-      setContacts(contactsWithPhones);
+      // Fetch contacts with joined user data - similar to ContactsScreen
+      const { data: contactsData, error: contactsError } = await supabase
+        .from('contacts')
+        .select(`
+          id, 
+          name, 
+          email, 
+          phone_number,
+          contact_id,
+          contacts_users:contact_id(id, name, email, phone_number)
+        `)
+        .eq('owner_id', user.id)
+        .order('name');
+        
+      if (contactsError) throw contactsError;
+      
+      // Transform database contacts to match the format expected by the rest of the code
+      const enhancedContacts = contactsData.map(contact => ({
+        id: contact.id.toString(),
+        name: contact.name,
+        emails: contact.email ? [{ email: contact.email }] : [],
+        phoneNumbers: contact.phone_number ? [{ number: contact.phone_number }] : [],
+        appUserId: contact.contact_id,
+        appUserEmail: contact.email,
+        appUserName: contact.name,
+        appUserPhone: contact.phone_number,
+        isRegistered: true,
+        contactInfo: contact.contacts_users
+      }));
+      
+      setContacts(enhancedContacts);
       setShowingContacts(true);
     } catch (error) {
       console.error("Error loading contacts:", error);
@@ -342,13 +353,123 @@ const EditEventScreen = () => {
 
       // If invite-only, handle invited contacts
       if (!isOpen && selectedContacts.length > 0) {
-        // In a real app, you would store these invitations in a table
-        // For now, we'll just show an alert with the invited contacts
-        const invitedNames = selectedContacts.map((c) => c.name).join(", ");
-        Alert.alert(
-          "Invitations",
-          `Invitations would be sent to: ${invitedNames}`
-        );
+        let registeredCount = 0;
+        let unregisteredCount = 0;
+        
+        // Process each selected contact and create invitations
+        const invitePromises = selectedContacts.map(async (contact) => {
+          try {
+            // If this contact is a registered user
+            if (contact.isRegistered && contact.appUserId) {
+              console.log(`Using app data for registered user: ${contact.appUserName} (${contact.appUserEmail})`);
+              
+              // Check if invitation already exists
+              const { data: existingInvitation, error: checkError } = await supabase
+                .from('event_invitations')
+                .select('id')
+                .eq('event_id', event.id)
+                .eq('invitee_id', contact.appUserId)
+                .single();
+                
+              if (!checkError && existingInvitation) {
+                console.log(`Invitation already exists for user ${contact.appUserId}`);
+                return { type: 'existing' };
+              }
+              
+              // Use the app user ID directly
+              const { error: inviteError } = await supabase
+                .from('event_invitations')
+                .insert({
+                  event_id: event.id,
+                  inviter_id: user.id,
+                  invitee_id: contact.appUserId,
+                  status: 'pending'
+                });
+              
+              if (inviteError) {
+                console.error('Error creating invitation with app user ID:', inviteError);
+                return null;
+              }
+              
+              return { type: 'registered' };
+            }
+            
+            // For non-registered users with email or phone
+            let email = null;
+            if (contact.emails && contact.emails.length > 0) {
+              email = contact.emails[0].email;
+            }
+            
+            let phoneNumber = null;
+            if (!email && contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+              phoneNumber = contact.phoneNumbers[0].number.replace(/\D/g, '');
+              
+              // Format consistently with country code (assuming US numbers)
+              if (phoneNumber.length === 10) {
+                phoneNumber = `+1${phoneNumber}`;
+              } else if (phoneNumber.length > 10 && !phoneNumber.startsWith('+')) {
+                phoneNumber = `+${phoneNumber}`;
+              }
+            }
+            
+            if (!email && !phoneNumber) {
+              console.log('No contact info for:', contact.name);
+              return null;
+            }
+            
+            // Check if invitation already exists
+            const contactValue = email || phoneNumber;
+            const contactType = email ? 'email' : 'phone';
+            
+            const { data: existingInvitation, error: checkError } = await supabase
+              .from('event_invitations')
+              .select('id')
+              .eq('event_id', event.id)
+              .eq(contactType === 'email' ? 'invitee_email' : 'invitee_phone', contactValue)
+              .single();
+              
+            if (!checkError && existingInvitation) {
+              console.log(`Invitation already exists for ${contactType}: ${contactValue}`);
+              return { type: 'existing' };
+            }
+            
+            // Store invitation with contact info for non-registered user
+            const { error: inviteError } = await supabase
+              .from('event_invitations')
+              .insert({
+                event_id: event.id,
+                inviter_id: user.id,
+                invitee_phone: contactType === 'phone' ? contactValue : null,
+                invitee_email: contactType === 'email' ? contactValue : null,
+                status: 'pending'
+              });
+            
+            if (inviteError) {
+              console.error('Error creating contact invitation:', inviteError);
+              return null;
+            }
+            
+            return { type: 'unregistered' };
+          } catch (error) {
+            console.error('Error processing invitation:', error);
+            return null;
+          }
+        });
+        
+        const results = await Promise.all(invitePromises);
+        const validResults = results.filter(r => r !== null && r.type !== 'existing');
+        
+        registeredCount = validResults.filter(r => r.type === 'registered').length;
+        unregisteredCount = validResults.filter(r => r.type === 'unregistered').length;
+        
+        if (registeredCount > 0 || unregisteredCount > 0) {
+          Alert.alert(
+            "Invitations Sent",
+            `Invitations sent to ${registeredCount} registered users and ${unregisteredCount} contacts who aren't registered yet.`
+          );
+        } else if (results.filter(r => r && r.type === 'existing').length === selectedContacts.length) {
+          Alert.alert("No New Invitations", "All selected contacts have already been invited to this event.");
+        }
       }
 
       Alert.alert("Success", "Your event has been updated!");
@@ -364,6 +485,8 @@ const EditEventScreen = () => {
   const renderContactItem = (contact, index) => {
     const isSelected = selectedContacts.some((c) => c.id === contact.id);
     const contactName = contact.name || "No Name";
+    const contactEmail = contact.appUserEmail || (contact.emails && contact.emails[0]?.email) || "";
+    const contactPhone = contact.appUserPhone || (contact.phoneNumbers && contact.phoneNumbers[0]?.number) || "";
 
     return (
       <TouchableOpacity
@@ -371,7 +494,11 @@ const EditEventScreen = () => {
         style={[styles.contactItem, isSelected && styles.selectedContact]}
         onPress={() => toggleContactSelection(contact)}
       >
-        <Text style={styles.contactName}>{contactName}</Text>
+        <View style={styles.contactItemContent}>
+          <Text style={styles.contactName}>{contactName}</Text>
+          {contactEmail && <Text style={styles.contactDetail}>{contactEmail}</Text>}
+          {contactPhone && <Text style={styles.contactDetail}>{contactPhone}</Text>}
+        </View>
         {isSelected && (
           <MaterialIcons name="check" size={20} color={COLORS.primary} />
         )}
@@ -1140,9 +1267,17 @@ const styles = StyleSheet.create({
   selectedContact: {
     backgroundColor: "#F0F0FF",
   },
+  contactItemContent: {
+    flex: 1,
+  },
   contactName: {
     fontSize: FONT_SIZES.md,
     color: COLORS.text,
+  },
+  contactDetail: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textLight,
+    marginTop: 2,
   },
   tagChipsContainer: {
     flexDirection: "row",

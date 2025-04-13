@@ -15,11 +15,19 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabaseClient';
 import { COLORS, SPACING, FONT_SIZES } from '../constants';
 
-const ContactsScreen = ({ navigation }) => {
+const ContactsScreen = ({ navigation, route }) => {
+  // Check if we're in selection mode for inviting contacts
+  const selectionMode = route.params?.onContactsSelected !== undefined;
+  const onContactsSelected = route.params?.onContactsSelected;
+  const eventId = route.params?.eventId;
+  const isTicketmasterEvent = route.params?.isTicketmasterEvent || false;
+  const eventData = route.params?.eventData;
+  
   const [showAddContactModal, setShowAddContactModal] = useState(false);
   const [user, setUser] = useState(null);
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedContacts, setSelectedContacts] = useState([]);
   const [newContact, setNewContact] = useState({
     name: '',
     email: '',
@@ -216,10 +224,31 @@ const ContactsScreen = ({ navigation }) => {
 
   const renderContactItem = ({ item }) => {
     const contactUser = item.contacts_users;
+    const isSelected = selectedContacts.some(contact => contact.id === item.contact_id);
+    
+    const onContactPress = () => {
+      if (selectionMode) {
+        // Toggle selection
+        if (isSelected) {
+          setSelectedContacts(selectedContacts.filter(c => c.id !== item.contact_id));
+        } else {
+          setSelectedContacts([...selectedContacts, {
+            id: item.contact_id,
+            name: item.name,
+            email: item.email,
+            phone_number: item.phone_number
+          }]);
+        }
+      } else {
+        // Normal navigation to profile
+        navigation.navigate('UserProfile', { userId: item.contact_id });
+      }
+    };
+    
     return (
       <TouchableOpacity 
-        style={styles.contactItem}
-        onPress={() => navigation.navigate('UserProfile', { userId: item.contact_id })}
+        style={[styles.contactItem, isSelected && styles.selectedContactItem]}
+        onPress={onContactPress}
       >
         <View style={styles.contactAvatar}>
           <Text style={styles.contactInitial}>
@@ -233,7 +262,17 @@ const ContactsScreen = ({ navigation }) => {
             <Text style={styles.contactDetails}>{item.phone_number}</Text>
           )}
         </View>
-        <MaterialIcons name="chevron-right" size={24} color={COLORS.textSecondary} />
+        {selectionMode ? (
+          <View style={styles.selectionIndicator}>
+            {isSelected ? (
+              <MaterialIcons name="check-circle" size={24} color={COLORS.primary} />
+            ) : (
+              <View style={styles.unselectedCircle} />
+            )}
+          </View>
+        ) : (
+          <MaterialIcons name="chevron-right" size={24} color={COLORS.textSecondary} />
+        )}
       </TouchableOpacity>
     );
   };
@@ -258,13 +297,36 @@ const ContactsScreen = ({ navigation }) => {
         >
           <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>My Contacts</Text>
-        <TouchableOpacity 
-          style={styles.addIconButton}
-          onPress={() => setShowAddContactModal(true)}
-        >
-          <MaterialIcons name="add" size={24} color={COLORS.primary} />
-        </TouchableOpacity>
+        
+        <Text style={styles.headerTitle}>
+          {selectionMode ? 'Select Contacts to Invite' : 'My Contacts'}
+        </Text>
+        
+        {selectionMode ? (
+          <TouchableOpacity 
+            style={styles.doneButton}
+            onPress={() => {
+              if (selectedContacts.length === 0) {
+                Alert.alert('No Contacts Selected', 'Please select at least one contact to invite.');
+                return;
+              }
+              // Call the callback function with selected contacts
+              if (onContactsSelected) {
+                onContactsSelected(selectedContacts);
+              }
+              navigation.goBack();
+            }}
+          >
+            <Text style={styles.doneButtonText}>Done</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity 
+            style={styles.addIconButton}
+            onPress={() => setShowAddContactModal(true)}
+          >
+            <MaterialIcons name="add" size={24} color={COLORS.primary} />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Contacts List */}
@@ -283,13 +345,15 @@ const ContactsScreen = ({ navigation }) => {
         />
       )}
 
-      {/* Floating Add Button */}
-      <TouchableOpacity
-        style={styles.floatingAddButton}
-        onPress={() => setShowAddContactModal(true)}
-      >
-        <MaterialIcons name="add" size={24} color="white" />
-      </TouchableOpacity>
+      {/* Floating Add Button - only shown in normal mode */}
+      {!selectionMode && (
+        <TouchableOpacity
+          style={styles.floatingAddButton}
+          onPress={() => setShowAddContactModal(true)}
+        >
+          <MaterialIcons name="add" size={24} color="white" />
+        </TouchableOpacity>
+      )}
 
       {/* Add Contact Modal */}
       <Modal
@@ -577,7 +641,28 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     fontWeight: '600',
     color: COLORS.text,
-  }
+  },
+  selectedContactItem: {
+    backgroundColor: '#F0F0F0',
+  },
+  selectionIndicator: {
+    marginLeft: 'auto',
+  },
+  unselectedCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.textSecondary,
+  },
+  doneButton: {
+    padding: SPACING.xs,
+  },
+  doneButtonText: {
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
+    color: COLORS.primary,
+  },
 });
 
 export default ContactsScreen; 

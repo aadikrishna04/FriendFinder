@@ -223,52 +223,43 @@ const CreateEventScreen = () => {
     setLoadingContacts(true);
 
     try {
-      const { status } = await Contacts.requestPermissionsAsync();
-
-      if (status !== "granted") {
-        Alert.alert(
-          "Permission Denied",
-          "Cannot access contacts without permission"
-        );
-        setLoadingContacts(false);
-        return;
-      }
-
-      const { data } = await Contacts.getContactsAsync({
-        fields: [
-          Contacts.Fields.PhoneNumbers,
-          Contacts.Fields.Emails,  // Explicitly request emails
-          Contacts.Fields.Name,
-          Contacts.Fields.Image,
-        ],
-        sort: Contacts.SortTypes.FirstName,
-      });
-
-      console.log(`Loaded ${data.length} contacts`);
+      // Make sure we have the most up-to-date user information
+      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
       
-      // Log how many contacts have emails
-      const contactsWithEmails = data.filter(
-        (contact) => contact.emails && contact.emails.length > 0
-      );
-      console.log(`${contactsWithEmails.length} contacts have email addresses`);
+      if (userError) throw userError;
+      
+      // Store the updated user in component state to be available throughout the component
+      setUser(currentUser);
 
-      const contactsWithPhones = data.filter(
-        (contact) => contact.phoneNumbers && contact.phoneNumbers.length > 0
-      );
+      // Fetch contacts with joined user data - similar to ContactsScreen
+      const { data: contactsData, error: contactsError } = await supabase
+        .from('contacts')
+        .select(`
+          id, 
+          name, 
+          email, 
+          phone_number,
+          contact_id,
+          contacts_users:contact_id(id, name, email, phone_number)
+        `)
+        .eq('owner_id', currentUser.id)
+        .order('name');
+        
+      if (contactsError) throw contactsError;
       
-      console.log(`${contactsWithPhones.length} contacts have phone numbers`);
-
-      // Use contacts with either emails or phone numbers
-      const usableContacts = data.filter(
-        (contact) => 
-          (contact.phoneNumbers && contact.phoneNumbers.length > 0) ||
-          (contact.emails && contact.emails.length > 0)
-      );
-      
-      console.log(`${usableContacts.length} contacts have either email or phone`);
-      
-      // Fetch registered app users and enhance the contacts with app user info
-      const enhancedContacts = await fetchRegisteredUsers(usableContacts);
+      // Transform database contacts to match the format expected by the rest of the code
+      const enhancedContacts = contactsData.map(contact => ({
+        id: contact.id.toString(),
+        name: contact.name,
+        emails: contact.email ? [{ email: contact.email }] : [],
+        phoneNumbers: contact.phone_number ? [{ number: contact.phone_number }] : [],
+        appUserId: contact.contact_id,
+        appUserEmail: contact.email,
+        appUserName: contact.name,
+        appUserPhone: contact.phone_number,
+        isRegistered: true,
+        contactInfo: contact.contacts_users
+      }));
       
       setContacts(enhancedContacts);
       setShowingContacts(true);
@@ -280,134 +271,12 @@ const CreateEventScreen = () => {
     }
   };
   
-  // Fetch registered users from database and match with contacts
+  // Since we're now getting contacts directly from the database,
+  // we don't need to fetch registered users separately
   const fetchRegisteredUsers = async (contactsList) => {
-    try {
-      // Extract all unique emails and phone numbers from contacts
-      const emailsSet = new Set();
-      const phonesSet = new Set();
-      
-      contactsList.forEach(contact => {
-        // Get emails
-        if (contact.emails && contact.emails.length > 0) {
-          contact.emails.forEach(email => {
-            if (email.email) emailsSet.add(email.email.toLowerCase());
-          });
-        }
-        
-        // Get phones
-        if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
-          contact.phoneNumbers.forEach(phone => {
-            // Standardize phone numbers by removing non-digit characters
-            const standardizedPhone = phone.number.replace(/\D/g, '');
-            if (standardizedPhone) phonesSet.add(standardizedPhone);
-          });
-        }
-      });
-      
-      const emails = Array.from(emailsSet);
-      const phones = Array.from(phonesSet);
-      
-      console.log(`Extracted ${emails.length} unique emails and ${phones.length} unique phone numbers`);
-      
-      // Find registered users by email
-      const { data: emailUsers, error: emailError } = await supabase
-        .from('users')
-        .select('id, name, email, phone_number')
-        .in('email', emails);
-      
-      if (emailError) {
-        console.error('Error fetching users by email:', emailError);
-      }
-      
-      // Find registered users by phone
-      const { data: phoneUsers, error: phoneError } = await supabase
-        .from('users')
-        .select('id, name, email, phone_number')
-        .in('phone_number', phones);
-      
-      if (phoneError) {
-        console.error('Error fetching users by phone:', phoneError);
-      }
-      
-      // Combine users, avoiding duplicates
-      const appUsers = [];
-      const userIds = new Set();
-      
-      if (emailUsers) {
-        emailUsers.forEach(user => {
-          if (!userIds.has(user.id)) {
-            appUsers.push(user);
-            userIds.add(user.id);
-          }
-        });
-      }
-      
-      if (phoneUsers) {
-        phoneUsers.forEach(user => {
-          if (!userIds.has(user.id)) {
-            appUsers.push(user);
-            userIds.add(user.id);
-          }
-        });
-      }
-      
-      console.log(`Found ${appUsers.length} registered app users`);
-      
-      // Create lookup maps for both email and phone
-      const emailMap = new Map();
-      const phoneMap = new Map();
-      
-      appUsers.forEach(user => {
-        if (user.email) emailMap.set(user.email.toLowerCase(), user);
-        if (user.phone_number) phoneMap.set(user.phone_number, user);
-      });
-      
-      // Enhance contacts with app user data
-      return contactsList.map(contact => {
-        // Try to match by email first
-        let appUser = null;
-        
-        if (contact.emails && contact.emails.length > 0) {
-          for (const emailObj of contact.emails) {
-            if (emailObj.email) {
-              const email = emailObj.email.toLowerCase();
-              if (emailMap.has(email)) {
-                appUser = emailMap.get(email);
-                break;
-              }
-            }
-          }
-        }
-        
-        // If no match by email, try by phone
-        if (!appUser && contact.phoneNumbers && contact.phoneNumbers.length > 0) {
-          for (const phoneObj of contact.phoneNumbers) {
-            const standardizedPhone = phoneObj.number.replace(/\D/g, '');
-            if (phoneMap.has(standardizedPhone)) {
-              appUser = phoneMap.get(standardizedPhone);
-              break;
-            }
-          }
-        }
-        
-        // Return enhanced contact
-        return appUser ? {
-          ...contact,
-          appUserId: appUser.id,
-          appUserEmail: appUser.email,
-          appUserName: appUser.name,
-          appUserPhone: appUser.phone_number,
-          isRegistered: true
-        } : {
-          ...contact,
-          isRegistered: false
-        };
-      });
-    } catch (error) {
-      console.error('Error fetching registered users:', error);
-      return contactsList; // Return original list if there's an error
-    }
+    // This is no longer needed as we're getting contacts directly from the database
+    // Just return the contacts list as is
+    return contactsList;
   };
 
   const toggleContactSelection = (contact) => {
@@ -505,14 +374,28 @@ const CreateEventScreen = () => {
       );
       return;
     }
-
-    if (!user) {
+    
+    // Get latest user information to ensure we have the current user
+    const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError) {
+      Alert.alert(
+        "Authentication Error",
+        "There was a problem with your authentication"
+      );
+      return;
+    }
+    
+    if (!currentUser) {
       Alert.alert(
         "Authentication Error",
         "You must be logged in to create an event"
       );
       return;
     }
+    
+    // Update user state with latest data
+    setUser(currentUser);
 
     setUploading(true);
 
@@ -551,7 +434,7 @@ const CreateEventScreen = () => {
         .from("events")
         .insert([
           {
-            host_id: user.id,
+            host_id: currentUser.id,
             title,
             description,
             location: address,
@@ -593,7 +476,7 @@ const CreateEventScreen = () => {
                   .from('event_invitations')
                   .insert({
                     event_id: eventId,
-                    inviter_id: user.id,
+                    inviter_id: currentUser.id,
                     invitee_id: contact.appUserId,
                     status: 'pending'
                   });
@@ -651,7 +534,7 @@ const CreateEventScreen = () => {
                 .from('event_invitations')
                 .insert({
                   event_id: eventId,
-                  inviter_id: user.id,
+                  inviter_id: currentUser.id,
                   invitee_phone: contactType === 'phone' ? contactValue : null,
                   invitee_email: contactType === 'email' ? contactValue : null,
                   status: 'pending'
@@ -684,10 +567,11 @@ const CreateEventScreen = () => {
         // Process selected groups - add entries to event_groups table
         let totalGroupMembers = 0;
         if (selectedGroups.length > 0) {
+          // Still add entries to event_groups table for tracking purposes
           const groupEntries = selectedGroups.map(group => ({
             event_id: eventId,
             group_id: group.id,
-            invited_by: user.id
+            invited_by: currentUser.id
           }));
           
           const { error: groupInviteError } = await supabase
@@ -695,10 +579,82 @@ const CreateEventScreen = () => {
             .insert(groupEntries);
             
           if (groupInviteError) {
-            console.error('Error inviting groups:', groupInviteError);
-          } else {
-            console.log(`${selectedGroups.length} groups invited to event`);
-            totalGroupMembers = selectedGroups.reduce((sum, group) => sum + group.memberCount, 0);
+            console.error('Error recording group invitations:', groupInviteError);
+          }
+          
+          // Now fetch each group's members and send individual invitations
+          let groupMemberInvites = [];
+          
+          // Process each selected group
+          for (const group of selectedGroups) {
+            console.log(`Processing group: ${group.name} (ID: ${group.id})`);
+            
+            // Fetch all members of this group
+            const { data: membersData, error: membersError } = await supabase
+              .from('group_members')
+              .select(`
+                user_id
+              `)
+              .eq('group_id', group.id);
+              
+            if (membersError) {
+              console.error(`Error fetching members for group ${group.id}:`, membersError);
+              continue; // Skip to next group if there's an error
+            }
+            
+            console.log(`Found ${membersData.length} members in group ${group.name}`);
+            
+            // Get user details in a separate query
+            if (membersData.length > 0) {
+              const memberUserIds = membersData.map(member => member.user_id);
+              
+              // Get user details for these IDs
+              const { data: usersData, error: usersError } = await supabase
+                .from('users')
+                .select('id, name, email, phone_number')
+                .in('id', memberUserIds);
+                
+              if (usersError) {
+                console.error(`Error fetching user details for group ${group.id}:`, usersError);
+                continue;
+              }
+              
+              // Now process each user
+              for (const userData of usersData) {
+                // Skip if the member is the current user/inviter
+                if (userData.id === currentUser.id) {
+                  continue;
+                }
+                
+                // Add to our group member invites array
+                groupMemberInvites.push({
+                  event_id: eventId,
+                  inviter_id: currentUser.id,
+                  invitee_id: userData.id,
+                  status: 'pending'
+                });
+              }
+            }
+          }
+          
+          // Now send all group member invitations in a batch
+          if (groupMemberInvites.length > 0) {
+            console.log(`Sending ${groupMemberInvites.length} individual invitations to group members`);
+            
+            // Insert all invitations in a single batch
+            const { data: invitesData, error: invitesError } = await supabase
+              .from('event_invitations')
+              .insert(groupMemberInvites);
+              
+            if (invitesError) {
+              console.error('Error sending invitations to group members:', invitesError);
+            } else {
+              console.log(`Successfully sent ${groupMemberInvites.length} group member invitations`);
+              // Update the count for our message
+              totalGroupMembers = groupMemberInvites.length;
+              // Add these to our registered count since they're all registered users
+              registeredCount += groupMemberInvites.length;
+            }
           }
         }
         
@@ -731,6 +687,8 @@ const CreateEventScreen = () => {
   const renderContactItem = (contact, index) => {
     const isSelected = selectedContacts.some((c) => c.id === contact.id);
     const contactName = contact.name || "No Name";
+    const contactEmail = contact.appUserEmail || (contact.emails && contact.emails[0]?.email) || "";
+    const contactPhone = contact.appUserPhone || (contact.phoneNumbers && contact.phoneNumbers[0]?.number) || "";
 
     return (
       <TouchableOpacity
@@ -738,7 +696,11 @@ const CreateEventScreen = () => {
         style={[styles.contactItem, isSelected && styles.selectedContact]}
         onPress={() => toggleContactSelection(contact)}
       >
-        <Text style={styles.contactName}>{contactName}</Text>
+        <View style={styles.contactItemContent}>
+          <Text style={styles.contactName}>{contactName}</Text>
+          {contactEmail && <Text style={styles.contactDetail}>{contactEmail}</Text>}
+          {contactPhone && <Text style={styles.contactDetail}>{contactPhone}</Text>}
+        </View>
         {isSelected && (
           <MaterialIcons name="check" size={20} color={COLORS.primary} />
         )}
@@ -1549,9 +1511,17 @@ const styles = StyleSheet.create({
   selectedContact: {
     backgroundColor: "#F0F0FF",
   },
+  contactItemContent: {
+    flex: 1,
+  },
   contactName: {
     fontSize: FONT_SIZES.md,
     color: COLORS.text,
+  },
+  contactDetail: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textLight,
+    marginTop: 2,
   },
   searchIndicator: {
     position: "absolute",
